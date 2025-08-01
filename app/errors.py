@@ -1,0 +1,159 @@
+"""The one exception tree — thirty classes, one base, no ad-hoc raises.
+
+Every failure this service can express is a class in here, and every class carries two
+class-level facts: a stable ``code`` the console branches on and an ``http_status``
+payzeno-api's ``LedgerHttpClient`` branches on. Neither is ever passed in at the raise
+site. That is deliberate and it is the reason this file is thirty classes rather than one
+class with a ``status=`` argument: the status is a property of the *condition*, not of the
+caller's mood, and letting a raise site choose it is how ``account_frozen`` spent two
+months returning 500, tripping payzeno-api's circuit breaker and paging a human for what
+was a policy decision (see ``docs/adr/0009-double-entry-invariants.md``).
+
+``app/api/error_handlers.py`` registers exactly one handler for
+:class:`PayzenoLedgerError` and is the only thing in the repo that builds an error
+response. Nothing else constructs a ``JSONResponse`` with an error body.
+
+Layering: this module sits at L-1. It imports nothing from ``app/`` at all — not even
+``app.logging`` — because every other layer imports it (71 modules at last count) and a
+cycle here is a cycle everywhere.
+"""
+
+from __future__ import annotations
+
+from typing import Any, ClassVar
+
+__all__ = [
+    "AccountFrozenError",
+    "AccountNotFoundError",
+    "BankAccountProjectionNotFoundError",
+    "BankAccountUnusableError",
+    "BatchNotFoundError",
+    "BatchNotReconcilableError",
+    "BusPublishError",
+    "ChargeProjectionNotFoundError",
+    "CurrencyMismatchError",
+    "DualControlRequiredError",
+    "DuplicateDisputeError",
+    "DuplicateSettlementError",
+    "IdempotencyConflictError",
+    "InsufficientBalanceError",
+    "LedgerIntegrityError",
+    "LivemodeMismatchError",
+    "NegativeAmountError",
+    "NotFoundError",
+    "OrphanedItemError",
+    "PayoutBlockedError",
+    "PayoutError",
+    "PayzenoLedgerError",
+    "ProcessorIndeterminateError",
+    "ProcessorUnavailableError",
+    "ReconciliationItemNotFoundError",
+    "RetryExhaustedError",
+    "RetryableSettlementError",
+    "SettlementError",
+    "SettlementLockedError",
+    "SettlementVarianceExceededError",
+    "TransactionNotFoundError",
+    "UnbalancedTransactionError",
+    "UpstreamError",
+    "ValidationError",
+]
+
+
+class PayzenoLedgerError(Exception):
+    """Root of the tree. Everything raised on purpose in this service is one of these.
+
+    ``details`` is free-form and lands verbatim under ``error.details`` in the ``ApiError``
+    envelope, so it must only ever contain values that are safe to hand to another
+    service: ids, counts, statuses, currency codes. Never a PAN, never a bank account
+    number, never a raw acquirer payload. ``app/middleware/redaction.py`` is a backstop,
+    not a licence.
+    """
+
+    #: Stable machine-readable code. The console switches on it; do not reword.
+    code: ClassVar[str] = "internal_error"
+
+    http_status: ClassVar[int] = 500
+
+
+class UnbalancedTransactionError(LedgerIntegrityError):
+    """Debits != credits within a currency. Invariant 1, ``LedgerPoster.post``."""
+
+
+class NegativeAmountError(LedgerIntegrityError):
+    """A posting line carries a non-positive ``amount_minor``.
+
+    Direction lives in ``direction``, never in the sign. A negative amount means someone
+    encoded a credit as a negative debit, and two such lines net to the right number
+    while every per-account aggregate is wrong.
+    """
+
+
+class LivemodeMismatchError(LedgerIntegrityError):
+    """Test-mode and live-mode rows met inside one transaction.
+
+    The single worst thing this service can do quietly, which is why it is an integrity
+    error and not a validation error: a sandbox charge that lands on a live merchant's
+    balance is a payout of real money.
+    """
+
+
+class CurrencyMismatchError(LedgerIntegrityError):
+    """Two currencies inside one transaction, or an entry against a foreign-currency account.
+
+    400 rather than 500 — unlike its siblings this is reachable by a caller posting a
+    badly built request, and FX never shipped, so there is no legitimate cross-currency
+    transaction to be tolerant of.
+    """
+
+    code: ClassVar[str] = "retry_exhausted"
+
+
+# ---------------------------------------------------------------------------------------
+# Payouts
+# ---------------------------------------------------------------------------------------
+
+
+class PayoutError(PayzenoLedgerError):
+    """Base for every reason a payout will not be created or initiated."""
+
+    http_status: ClassVar[int] = 422
+
+
+class PayoutBlockedError(PayoutError):
+    """The merchant is ``restricted`` or ``suspended``.
+
+    Risk's decision, surfaced as a refusal rather than a silent zero payout so the
+    console can say why.
+    """
+
+
+class InsufficientBalanceError(PayoutError):
+    """``PayoutCalculator.compute_available()`` came back at or below zero.
+
+    Available is gross balance minus reserves minus in-flight payouts, and the in-flight
+    subtraction is why ``create_payout`` takes the merchant/currency advisory lock first.
+    """
+
+
+class BankAccountUnusableError(PayoutError):
+    """The destination bank account projection is not ``verified``.
+
+    Raised by every ``PayoutInitiator.initiate``. Each rail checks it itself rather than
+    trusting the service, because the rails are also reachable from the ops CLI.
+    """
+
+
+# ---------------------------------------------------------------------------------------
+# Everything else
+# ---------------------------------------------------------------------------------------
+
+
+class DualControlRequiredError(PayzenoLedgerError):
+    """Maker and checker are the same staff identity, or no identity was forwarded.
+
+    ``AdjustmentService.approve`` compares ``approved_by`` with ``requested_by``. The
+    ledger does not authenticate humans — payzeno-api's ``StaffGuard`` did — but it does
+    record which one, because dual control is meaningless otherwise.
+    """
+
