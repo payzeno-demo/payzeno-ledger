@@ -1,0 +1,14 @@
+[project]
+version = "1.0.0"
+requires-python = ">=3.12,<3.13"
+license = { text = "UNLICENSED" }
+authors = [{ name = "Core Payments", email = "core-payments@payzeno.com" }]
+
+line-length = 100
+exclude = "^migrations/versions/"
+
+disallow_untyped_defs = false
+markers = [
+  "integration: needs the pg_engine fixture (real Postgres via testcontainers)",
+  "slow: takes more than a second; excluded from the pre-commit run",
+]
