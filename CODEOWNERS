@@ -1,0 +1,95 @@
+# payzeno-ledger — code owners.
+#
+# Branch protection on `main` requires 2 approvals on this repo (see world conventions:
+# reviews_required.payzeno-ledger = 2). The team entry below is the catch-all; the
+# per-directory entries exist so the right person is *requested*, not so they are the
+# only person allowed to approve.
+#
+# Last audited: month 11. Yes, some of these are stale — see the note at the bottom.
+
+# Catch-all: everything in this repo belongs to Core Payments.
+*                                   @payzeno/core-payments
+
+# ---------------------------------------------------------------------------
+# The contract surface. Interface-first: ports, errors and the layering rule are
+# reviewed by the CTO because changing them changes every layer below (ADR 0002).
+# ---------------------------------------------------------------------------
+/app/ports.py                       @payzeno/core-payments @dhotfix
+/app/errors.py                      @payzeno/core-payments @dhotfix
+/app/container.py                   @payzeno/core-payments @dhotfix
+/app/main.py                        @payzeno/core-payments @dhotfix
+/app/config.py                      @payzeno/core-payments @dhotfix
+/docs/adr/                          @payzeno/core-payments @dhotfix
+
+# ---------------------------------------------------------------------------
+# Pure domain — money, fees, postings, the chart of accounts.
+# 100% coverage is enforced in CI; do not merge this without dhotfix.
+# ---------------------------------------------------------------------------
+/app/domain/                        @payzeno/core-payments @dhotfix
+/app/domain/rules/                  @payzeno/core-payments @dhotfix
+
+# ---------------------------------------------------------------------------
+# The money path proper. LedgerPoster is the ONE writer of ledger_transaction
+# and ledger_entry. Every change to it is a two-person review, no exceptions.
+# ---------------------------------------------------------------------------
+/app/services/transactions.py       @payzeno/core-payments @dhotfix
+/app/services/accounts.py           @payzeno/core-payments @dhotfix
+/app/services/audit.py              @payzeno/core-payments @dhotfix
+
+# ---------------------------------------------------------------------------
+# Settlement + reconciliation. Split ownership is historical, not by design:
+# the sweep and the retry drain grew three months apart.
+# ---------------------------------------------------------------------------
+/app/services/settlements.py        @payzeno/core-payments @nmigration
+/app/services/settlement_parser.py  @payzeno/core-payments @nmigration
+/app/services/reconciliation/       @payzeno/core-payments @nmigration @mregression
+/app/services/invoices.py           @payzeno/core-payments @nmigration
+/app/services/funding.py            @payzeno/core-payments @nmigration
+/app/services/captures.py           @payzeno/core-payments @nmigration
+/app/consumers/                     @payzeno/core-payments @nmigration
+/app/publishers/                    @payzeno/core-payments @nmigration
+/app/clients/                       @payzeno/core-payments @nmigration
+
+# ---------------------------------------------------------------------------
+# Data access, workers, the operator CLI.
+# ---------------------------------------------------------------------------
+/app/repositories/                  @payzeno/core-payments @mregression
+/app/workers/                       @payzeno/core-payments @mregression
+/app/ops/                           @payzeno/core-payments @mregression
+/app/db/                            @payzeno/core-payments @dhotfix
+
+# ---------------------------------------------------------------------------
+# Payouts and reserves. STALE — mhandover is handing this over; new reviews on
+# these paths should go to @mregression until the CODEOWNERS cleanup ticket lands.
+# ---------------------------------------------------------------------------
+/app/services/payouts.py            @payzeno/core-payments @mhandover
+/app/services/rails/                @payzeno/core-payments @mhandover
+/app/services/reserves.py           @payzeno/core-payments @mhandover
+/app/models/payout.py               @payzeno/core-payments @mhandover
+/app/repositories/payout.py         @payzeno/core-payments @mhandover
+
+# ---------------------------------------------------------------------------
+# Schema. A migration is forever; both leads look at every one of these.
+# ---------------------------------------------------------------------------
+/app/models/                        @payzeno/core-payments @dhotfix @nmigration
+/migrations/                        @payzeno/core-payments @dhotfix @nmigration
+
+# ---------------------------------------------------------------------------
+# The API surface is shared with Platform — payzeno-api is the only human caller
+# of /internal/v1 and they get a heads-up on every signature change.
+# ---------------------------------------------------------------------------
+/app/api/                           @payzeno/core-payments @nmigration
+/contracts/ledger-openapi.json      @payzeno/core-payments @payzeno/platform
+
+# ---------------------------------------------------------------------------
+# Runbooks and postmortems are SRE-owned. We write the code, Avi carries the pager.
+# ---------------------------------------------------------------------------
+/docs/runbooks/                     @payzeno/core-payments @payzeno/infrastructure
+/docs/postmortems/                  @payzeno/core-payments @payzeno/infrastructure
+
+# ---------------------------------------------------------------------------
+# Build + deploy plumbing. Infra reviews anything that changes how we ship.
+# ---------------------------------------------------------------------------
+/Dockerfile                         @payzeno/core-payments @payzeno/infrastructure
+/docker-compose.override.yml        @payzeno/core-payments @payzeno/infrastructure
+/.github/workflows/                 @payzeno/core-payments @payzeno/infrastructure

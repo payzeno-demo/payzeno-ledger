@@ -1,0 +1,2253 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "payzeno-ledger",
+    "version": "1.0.0",
+    "description": "Internal double-entry ledger for Payzeno. Settlement import, reconciliation and payouts.\n\nNot public. Every route under /internal/v1 requires X-Payzeno-Internal-Secret and a client certificate terminated at the internal nginx. Callers are payzeno-api and payzeno-billing-legacy; this service calls neither of them back.\n\nSNAPSHOT: this file is checked in and asserted by tests/api/test_openapi_snapshot.py, and payzeno-api's test/contract/ledger-routes.contract.spec.ts reads a copy of it. Regenerate with `make openapi`."
+  },
+  "servers": [
+    {
+      "url": "http://payzeno-ledger:8000",
+      "description": "internal VPC"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness \u2014 is the process running",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/accounts": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "List accounts, optionally filtered",
+        "operationId": "list_accounts",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/accounts/bootstrap": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Create the standing accounts for a merchant/currency pair",
+        "operationId": "bootstrap_accounts",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapAccountsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/accounts/{account_id}/freeze": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Freeze an account so nothing may post against it",
+        "operationId": "freeze_account",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/balances/{merchant_id}": {
+      "get": {
+        "tags": [
+          "balances"
+        ],
+        "summary": "Current or point-in-time balance for one merchant and currency",
+        "operationId": "get_balance",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Balance"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "merchant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/balances/{merchant_id}/history": {
+      "get": {
+        "tags": [
+          "balances"
+        ],
+        "summary": "Bucketed balance timeseries",
+        "operationId": "get_balance_history",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceHistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "merchant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/entries": {
+      "get": {
+        "tags": [
+          "entries"
+        ],
+        "summary": "List entries for one account over a bounded window",
+        "operationId": "list_entries",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Paginated"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/LedgerEntry"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/invoices/lines": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Read back the staged lines for one invoice",
+        "operationId": "list_staged_lines",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedInvoiceLinesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/invoices/lines/stage": {
+      "post": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Stage the lines of one invoice",
+        "operationId": "stage_lines",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageInvoiceLinesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/ops/adjustments": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Request a manual ledger adjustment (maker)",
+        "operationId": "request_adjustment",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerAdjustmentRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/ops/adjustments/{request_id}/approve": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Approve and post a manual adjustment (checker)",
+        "operationId": "approve_adjustment",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerAdjustmentRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/ops/audit/trial-balance": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Assert debits equal credits for one currency",
+        "operationId": "run_trial_balance",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrialBalanceResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/ops/items/{item_id}/match": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Attach a charge to an orphaned item by hand",
+        "operationId": "manual_match",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/payouts": {
+      "get": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "List payouts",
+        "operationId": "list_payouts",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Paginated"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Payout"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "Create and initiate a payout",
+        "operationId": "create_payout",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/payouts/{payout_id}": {
+      "get": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "Fetch one payout",
+        "operationId": "get_payout",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "payout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/payouts/{payout_id}/cancel": {
+      "post": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "Cancel a payout",
+        "operationId": "cancel_payout",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "payout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/payouts/{payout_id}/mark-failed": {
+      "post": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "Record a rail rejection or return",
+        "operationId": "mark_failed",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "payout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/payouts/{payout_id}/mark-paid": {
+      "post": {
+        "tags": [
+          "payouts"
+        ],
+        "summary": "Confirm a payout landed",
+        "operationId": "mark_paid",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "payout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/reconciliation/backlog": {
+      "get": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "How much settlement work is outstanding",
+        "operationId": "get_backlog",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationBacklog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/reconciliation/items/{item_id}/retry": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Retry one reconciliation item",
+        "operationId": "retry_item",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "settlement_locked \u2014 a sweep holds the batch lock. Normal; the console refetches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/reconciliation/runs": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Reconcile one settlement batch now",
+        "operationId": "start_run",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/reconciliation/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Fetch one reconciliation run",
+        "operationId": "get_run",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-batches": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "List settlement batches",
+        "operationId": "list_batches",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Paginated"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SettlementBatch"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "Open a settlement batch",
+        "operationId": "open_batch",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementBatch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "Fetch one batch",
+        "operationId": "get_batch",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementBatch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-batches/{batch_id}/close": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "Close a batch so it becomes reconcilable",
+        "operationId": "close_batch",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementBatch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-batches/{batch_id}/funding": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "Record the bank credit that funded a batch",
+        "operationId": "record_funding",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementBatch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-batches/{batch_id}/items": {
+      "get": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "List the items in a batch, scoped to one merchant",
+        "operationId": "list_items",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Paginated"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ReconciliationItem"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settlement-imports": {
+      "post": {
+        "tags": [
+          "settlements"
+        ],
+        "summary": "Accept a settlement file pushed by payzeno-billing-legacy",
+        "operationId": "import_legacy_records",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementImportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/transactions": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Post a balanced double-entry transaction",
+        "operationId": "post_transaction",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerTransaction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "List transactions",
+        "operationId": "list_transactions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Paginated"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/LedgerTransaction"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/transactions/bulk": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Post many transactions in one request",
+        "operationId": "post_transactions_bulk",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkPostTransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/transactions/{transaction_id}": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Fetch one transaction with its entries",
+        "operationId": "get_transaction",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerTransaction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/transactions/{transaction_id}/reverse": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Post the mirror-image transaction that undoes another",
+        "operationId": "reverse_transaction",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerTransaction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict \u2014 see error.code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness \u2014 should this task take traffic",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "InternalSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Payzeno-Internal-Secret",
+        "description": "Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's PAYZENO_INTERNAL_SECRET."
+      }
+    },
+    "schemas": {
+      "Account": {
+        "type": "object",
+        "title": "Account",
+        "description": "Re-exported from payzeno_contracts.types.Account."
+      },
+      "AccountListResponse": {
+        "type": "object",
+        "title": "AccountListResponse",
+        "description": "Re-exported from payzeno_contracts.types.AccountListResponse."
+      },
+      "Balance": {
+        "type": "object",
+        "title": "Balance",
+        "description": "Re-exported from payzeno_contracts.types.Balance."
+      },
+      "BalanceHistoryResponse": {
+        "type": "object",
+        "title": "BalanceHistoryResponse",
+        "description": "Re-exported from payzeno_contracts.types.BalanceHistoryResponse."
+      },
+      "BootstrapAccountsResponse": {
+        "type": "object",
+        "title": "BootstrapAccountsResponse",
+        "description": "Re-exported from payzeno_contracts.types.BootstrapAccountsResponse."
+      },
+      "BulkPostTransactionResponse": {
+        "type": "object",
+        "title": "BulkPostTransactionResponse",
+        "description": "Re-exported from payzeno_contracts.types.BulkPostTransactionResponse."
+      },
+      "HealthResponse": {
+        "type": "object",
+        "title": "HealthResponse",
+        "description": "Re-exported from payzeno_contracts.types.HealthResponse."
+      },
+      "LedgerAdjustmentRequest": {
+        "type": "object",
+        "title": "LedgerAdjustmentRequest",
+        "description": "Re-exported from payzeno_contracts.types.LedgerAdjustmentRequest."
+      },
+      "LedgerEntry": {
+        "type": "object",
+        "title": "LedgerEntry",
+        "description": "Re-exported from payzeno_contracts.types.LedgerEntry."
+      },
+      "LedgerTransaction": {
+        "type": "object",
+        "title": "LedgerTransaction",
+        "description": "Re-exported from payzeno_contracts.types.LedgerTransaction."
+      },
+      "Paginated": {
+        "type": "object",
+        "title": "Paginated",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "has_more"
+        ]
+      },
+      "Payout": {
+        "type": "object",
+        "title": "Payout",
+        "description": "Re-exported from payzeno_contracts.types.Payout."
+      },
+      "ReadinessResponse": {
+        "type": "object",
+        "title": "ReadinessResponse",
+        "description": "Re-exported from payzeno_contracts.types.ReadinessResponse."
+      },
+      "ReconciliationBacklog": {
+        "type": "object",
+        "title": "ReconciliationBacklog",
+        "description": "Re-exported from payzeno_contracts.types.ReconciliationBacklog."
+      },
+      "ReconciliationItem": {
+        "type": "object",
+        "title": "ReconciliationItem",
+        "description": "Re-exported from payzeno_contracts.types.ReconciliationItem."
+      },
+      "ReconciliationRun": {
+        "type": "object",
+        "title": "ReconciliationRun",
+        "description": "Re-exported from payzeno_contracts.types.ReconciliationRun."
+      },
+      "SettlementBatch": {
+        "type": "object",
+        "title": "SettlementBatch",
+        "description": "Re-exported from payzeno_contracts.types.SettlementBatch."
+      },
+      "SettlementImportResponse": {
+        "type": "object",
+        "title": "SettlementImportResponse",
+        "description": "Re-exported from payzeno_contracts.types.SettlementImportResponse."
+      },
+      "StageInvoiceLinesResponse": {
+        "type": "object",
+        "title": "StageInvoiceLinesResponse",
+        "description": "Re-exported from payzeno_contracts.types.StageInvoiceLinesResponse."
+      },
+      "StagedInvoiceLinesResponse": {
+        "type": "object",
+        "title": "StagedInvoiceLinesResponse",
+        "description": "Re-exported from payzeno_contracts.types.StagedInvoiceLinesResponse."
+      },
+      "TrialBalanceResult": {
+        "type": "object",
+        "title": "TrialBalanceResult",
+        "description": "Re-exported from payzeno_contracts.types.TrialBalanceResult."
+      },
+      "ApiError": {
+        "type": "object",
+        "title": "ApiError",
+        "description": "The one error envelope. Rendered by app/api/error_handlers.py from app/errors.py; nothing else in this service builds an error body.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              },
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "correlation_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "code",
+              "message",
+              "details"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    }
+  }
+}

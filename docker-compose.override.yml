@@ -1,0 +1,96 @@
+# Local-dev override for payzeno-ledger.
+#
+# The root compose file lives in payzeno-infrastructure and owns all eleven services.
+# This file only re-declares the ledger's own services and extends the root
+# definitions, so the environment block stays in exactly one place.
+#
+#   cd ../payzeno-infrastructure
+#   docker compose -f docker-compose.yml -f ../payzeno-ledger/docker-compose.override.yml up payzeno-ledger
+#
+# or, from here, `make up` — which does the same thing with the paths pre-wired.
+
+services:
+  payzeno-ledger:
+    extends:
+      file: ../payzeno-infrastructure/docker-compose.yml
+      service: payzeno-ledger
+    build:
+      context: .
+      target: runtime
+    # Source bind mount + reload. The venv stays in the image; only app/ is live.
+    volumes:
+      - ./app:/opt/payzeno/app:ro
+      - ./migrations:/opt/payzeno/migrations:ro
+    command:
+      - uvicorn
+      - app.main:create_app
+      - --factory
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /opt/payzeno/app
+    environment:
+      LOG_LEVEL: DEBUG
+      # Off locally: it turns every log line into a regex pass and makes the
+      # reload loop noticeably slower. Never off anywhere else.
+      FLAG_REDACT_PAN_IN_LOGS: "false"
+
+  # The scheduler. Same image, different command — see the Dockerfile note.
+  # Not in the root file: nobody needs the 11 periodic jobs firing unless they
+  # are working on them, so this is opt-in via `docker compose up payzeno-ledger-worker`.
+  payzeno-ledger-worker:
+    extends:
+      file: ../payzeno-infrastructure/docker-compose.yml
+      service: payzeno-ledger
+    build:
+      context: .
+      target: runtime
+    ports: []
+    healthcheck:
+      disable: true
+    volumes:
+      - ./app:/opt/payzeno/app:ro
+    command: ["python", "-m", "app.workers"]
+    environment:
+      LOG_LEVEL: DEBUG
+      # 15 minutes is unusable when you are debugging a sweep. 30s locally.
+      RECONCILE_SWEEP_INTERVAL_SECONDS: "30"
+      # ON here on purpose: the drain being off by default in prod is precisely
+      # what made the incident hard to reproduce on a laptop.
+      RETRY_DRAIN_ENABLED: "true"
+      RETRY_DRAIN_INTERVAL_SECONDS: "10"
+
+  # The two SQS consumers. Needs localstack up and the queues created —
+  # `make localstack-queues` in payzeno-infrastructure does that.
+  payzeno-ledger-consumer:
+    extends:
+      file: ../payzeno-infrastructure/docker-compose.yml
+      service: payzeno-ledger
+    build:
+      context: .
+      target: runtime
+    ports: []
+    healthcheck:
+      disable: true
+    volumes:
+      - ./app:/opt/payzeno/app:ro
+    command: ["python", "-m", "app.consumers"]
+    environment:
+      LOG_LEVEL: DEBUG
+
+  # One-shot. `docker compose run --rm payzeno-ledger-migrate`.
+  payzeno-ledger-migrate:
+    extends:
+      file: ../payzeno-infrastructure/docker-compose.yml
+      service: payzeno-ledger
+    build:
+      context: .
+      target: runtime
+    ports: []
+    healthcheck:
+      disable: true
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
