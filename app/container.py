@@ -169,10 +169,20 @@ class Container:
                 "nordpay": NordpayClient(settings),
                 "sandbox": SandboxProcessorClient(),
             },
+            entries=repos.entries,
+            accounts=repos.accounts,
             merchants=repos.merchants,
             metrics=metrics,
             settlements=self.settlement_service,
+            flags=self.flags,
             calculator=self.payout_calculator,
+            settings=settings,
+            clock=self.clock,
+        )
+        self.invoice_service = InvoiceStagingService(
+            funding=self.funding_service, settings=settings
+        )
+        self.deferred_capture_job = DeferredCaptureJob(
             sessions=self.sessions,
             settings=settings,
         )
