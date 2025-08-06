@@ -73,6 +73,17 @@ class PayzenoLedgerError(Exception):
     #: Stable machine-readable code. The console switches on it; do not reword.
     code: ClassVar[str] = "internal_error"
 
+    http_status: ClassVar[int] = 422
+
+
+class NotFoundError(PayzenoLedgerError):
+    """Nothing with that id exists, or nothing the caller may see.
+
+    The ledger does not distinguish the two. It is an internal service behind
+    payzeno-api's authorisation, so there is no enumeration risk to trade against a
+    legible error, but there is also no reason to leak which merchants exist.
+    """
+
     http_status: ClassVar[int] = 500
 
 
@@ -106,6 +117,17 @@ class CurrencyMismatchError(LedgerIntegrityError):
     transaction to be tolerant of.
     """
 
+    http_status: ClassVar[int] = 409
+
+
+class IdempotencyConflictError(PayzenoLedgerError):
+    """The idempotency key exists with a different request fingerprint.
+
+    The caller reused a key for a materially different body. Distinct from a *replay*,
+    which returns the original result and is not an error at all.
+    """
+
+    code: ClassVar[str] = "duplicate_settlement"
     code: ClassVar[str] = "retry_exhausted"
 
 
