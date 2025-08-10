@@ -118,6 +118,36 @@ __all__ = [
 ]
 
 
+class BootstrapAccountsRequest(BaseModel):
+    """``POST /internal/v1/accounts/bootstrap``.
+
+    payzeno-api calls this once per merchant per currency, right after
+    ``merchant.created``. It is idempotent by construction — ``AccountResolver`` upserts
+    on ``uq_account_merchant_type_currency_livemode``.
+    """
+
+    merchant_id: str
+    currency: str
+    livemode: bool = True
+
+
+class FreezeAccountRequest(BaseModel):
+    """``POST /internal/v1/accounts/{account_id}/freeze``. Risk-initiated, always."""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class AccountListResponse(BaseModel):
+    """``GET /internal/v1/accounts``. Unpaginated — a merchant has at most a dozen."""
+
+    data: list[Account]
+
+
+class MarkPayoutPaidRequest(BaseModel):
+    paid_at: datetime
+    bank_reference: str = Field(min_length=1, max_length=255)
+
+
 class RunTrialBalanceRequest(BaseModel):
     """``POST /internal/v1/ops/audit/trial-balance``. Staff-only, not in ``types.ts``."""
 
