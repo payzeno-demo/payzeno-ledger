@@ -101,7 +101,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(resolved.log_level, json_output=True)
 
     app = FastAPI(
+        title="payzeno-ledger",
         version="1.0.0",
+        redoc_url=None,
+        lifespan=lifespan,
+    )
+
+    app.state.settings = resolved
+    app.state.container = build_container(resolved)
+
+    # Order matters and is asserted by tests/api/test_middleware.py. install_middleware
+    # adds them bottom-up because Starlette wraps each new one around the stack so far.
+    install_middleware(app, resolved, app.state.container.flags)
+    register_error_handlers(app)
+
+    for router in ALL_ROUTERS:
+        # Each router declares its own full prefix — `/internal/v1/...` — rather than
+        # having one bolted on here. A route's path is then greppable from the file that
+        # owns it, which is what payzeno-api's contract test needs when it fails and
+        # somebody has to find the handler. `health.router` deliberately has no prefix:
+        # `/healthz`, `/readyz` are public and exempt from InternalAuthMiddleware.
+        app.include_router(router)
+
     # The scrape endpoint. Mounted rather than routed so it bypasses the router stack —
     # and it exposes BOTH registries: the HTTP histograms from app/middleware/metrics.py
     # on the default registry, and the business counters from app/metrics.py.
