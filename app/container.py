@@ -169,17 +169,42 @@ class Container:
                 "nordpay": NordpayClient(settings),
                 "sandbox": SandboxProcessorClient(),
             },
+            sessions=self.sessions,
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
             metrics=metrics,
+            clock=self.clock,
+        )
+        self.settlement_import_service = SettlementImportService(
             settlements=self.settlement_service,
             flags=self.flags,
+            clock=self.clock,
+        )
+
+        # Empty calendar at construction: BankingCalendar is built per request from the
+        # `banking_calendar` rows the caller loaded (ADR 0002 — app/domain may not read
+        # the database). This instance is the fallback for rails asked about a date the
+        # calendar has no row for, which is a weekend-only answer and always right.
+        self.calendar = BankingCalendar()
+        self.payout_calculator = PayoutCalculator(
             calculator=self.payout_calculator,
             settings=settings,
             clock=self.clock,
         )
         self.invoice_service = InvoiceStagingService(
+            sqs_client_factory=sqs_factory,
+            clock=self.clock,
+        )
+
+        # -- L6 jobs -----------------------------------------------------------------
+        # Attribute names are the contract `app/workers/__init__.py::JOB_ATTRIBUTES`
+        # reads. A job in that tuple with no attribute here logs `job_not_wired` and the
+        # other ten still start.
+        self.reconciliation_sweep_job = ReconciliationSweepJob(
+            settings=settings,
+        )
+        self.retry_drain_job = RetryDrainJob(
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
