@@ -169,11 +169,34 @@ class Container:
                 "nordpay": NordpayClient(settings),
                 "sandbox": SandboxProcessorClient(),
             },
+            default_acquirer="worldflow",
+        )
+
+        # OutboxPublisher is the business path: it stages into the caller's transaction,
+        # so a rolled-back settlement emits nothing. SnsPublisher has exactly one caller,
+        # OutboxDrainJob, and must never be handed to a service.
+        self.publisher = OutboxPublisher(repos.outbox)
+        self.sns_publisher = SnsPublisher(settings)
+
+        # -- L5 services -------------------------------------------------------------
+        self.account_resolver = AccountResolver(repos.accounts, self.clock)
+        self.ledger_poster = LedgerPoster(
             sessions=self.sessions,
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
             metrics=metrics,
+            clock=self.clock,
+        )
+
+        self.match_strategies = [
+            ExactReferenceMatch(repos.charges),
+            NetworkTransactionMatch(repos.charges),
+            HeuristicAmountWindowMatch(repos.charges, self.clock),
+        ]
+        self.manual_match = ManualMatch(repos.charges)
+
+        self.settlement_service = SettlementService(
             clock=self.clock,
         )
         self.settlement_import_service = SettlementImportService(
@@ -190,9 +213,17 @@ class Container:
         self.payout_calculator = PayoutCalculator(
             calculator=self.payout_calculator,
             settings=settings,
+            attempts=repos.captures,
+            processor=self.processor,
             clock=self.clock,
         )
         self.invoice_service = InvoiceStagingService(
+            requests=repos.adjustments, ledger=self.ledger_poster, clock=self.clock
+        )
+
+        # -- L6 consumers ------------------------------------------------------------
+        sqs_factory = sqs_client_factory(settings)
+        self.payment_event_consumer = PaymentEventConsumer(
             sqs_client_factory=sqs_factory,
             clock=self.clock,
         )
@@ -208,6 +239,7 @@ class Container:
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
+            repositories=repos,
             sessions=self.sessions,
             settings=settings,
         )
