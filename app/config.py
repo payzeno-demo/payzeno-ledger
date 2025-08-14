@@ -41,5 +41,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
+    retry_drain_batch_size: int = 50
     @classmethod
     @property
