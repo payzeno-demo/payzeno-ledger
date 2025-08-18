@@ -181,6 +181,7 @@ class Container:
         # -- L5 services -------------------------------------------------------------
         self.account_resolver = AccountResolver(repos.accounts, self.clock)
         self.ledger_poster = LedgerPoster(
+            accounts=repos.accounts,
             sessions=self.sessions,
             entries=repos.entries,
             accounts=repos.accounts,
@@ -201,6 +202,7 @@ class Container:
         )
         self.settlement_import_service = SettlementImportService(
             settlements=self.settlement_service,
+            items=repos.items,
             flags=self.flags,
             clock=self.clock,
         )
@@ -213,6 +215,9 @@ class Container:
         self.payout_calculator = PayoutCalculator(
             calculator=self.payout_calculator,
             settings=settings,
+            fundings=repos.fundings,
+            batches=repos.batches,
+            publisher=self.publisher,
             attempts=repos.captures,
             processor=self.processor,
             clock=self.clock,
@@ -241,6 +246,7 @@ class Container:
         self.deferred_capture_job = DeferredCaptureJob(
             repositories=repos,
             sessions=self.sessions,
+            publisher=self.sns_publisher,
             settings=settings,
         )
 

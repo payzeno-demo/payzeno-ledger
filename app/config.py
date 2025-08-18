@@ -41,7 +41,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    #: Local only — localstack. Must be unset in staging and production so boto3
+    #: resolves the real endpoint.
+    aws_endpoint_url: str | None = None
+
+    worldflow_breaker_window: int = 100
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
+    nordpay_acquirer_account: str = "payzeno-uk-1"
     retry_drain_batch_size: int = 50
     @classmethod
     @property
