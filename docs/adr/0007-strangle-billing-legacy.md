@@ -21,3 +21,15 @@ the Java code only once the ledger has been authoritative for a full billing cyc
 Strangler. Four steps, each behind a flag on both sides
 (`FLAG_LEDGER_OWNS_*` / `BILLING_FLAG_LEDGER_OWNS_*`):
 
+| Step | Capability | Landing zone | Status |
+|---|---|---|---|
+| 1 | fee computation | `app/domain/fees.py` | **done**, month 4 |
+| 2 | merchant balance | `app/services/balances.py`, `routers/balances.py` | **done**, month 5 |
+| 3 | payouts | `app/services/payouts.py`, `app/services/rails/**` | **done**, month 7 |
+| 4 | invoice **lines** | `app/services/invoices.py`, `routers/invoices.py`, `invoice_line_staging` (`0022`) | **in flight** |
+
+Step 1 left a scar on purpose. `app/domain/fees.py::legacy_blended_fee` is kept bit-for-bit
+compatible with Java's `LegacyBlendedFeeCalculator` so the parity tests can run both against
+the same fixtures. It was marked deprecated in month 4 and is still reached by one branch of
+`apportion_fee`, because the merchants on the old blended pricing model have not been
+migrated and nobody has scheduled it.
