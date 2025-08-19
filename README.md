@@ -63,6 +63,20 @@ You need `payzeno-infrastructure` checked out as a sibling directory. Every comp
 lives in the root file there; `docker-compose.override.yml` here only adds the bind mount and
 the reload flag.
 
+### Tests
+
+```bash
+make test              # unit + services + api + repositories + workers. No database.
+make test-integration  # testcontainers Postgres. Needs a Docker socket.
+make check             # lint + types + test — run this before you open a PR
+```
+
+Two coverage gates, both enforced in CI: **100% on `app/domain/`**, **85% on `app/services/`**.
+The domain layer is pure functions over frozen dataclasses with no I/O, so 100% is a real bar
+and not a vanity number.
+
+---
+
 ## The periodic jobs
 
 All eleven subclass `PeriodicJob` and register in `app/workers/__init__.py::register_jobs()`.
@@ -82,6 +96,78 @@ be changed with a task restart instead of a redeploy. That mattered once.
 | `LedgerAuditJob` | daily | trial balance per currency |
 | `OutboxDrainJob` | 5s | ships the transactional outbox to SNS |
 | `BatchCloseJob` | 1h | closes batches whose items are all terminal |
+
+---
+
+## Gotchas
+
+Read these before your first PR. Most of them are here because of something that already
+went wrong.
+
+**Repositories are stateless.** No session on the instance. `reconcile_batch` uses three
+sessions in a single pass against one shared repository instance, and the retry drain takes a
+fourth. A constructor-bound session would look tidier and would quietly serialise all of it.
+
+**`DATABASE_POOL_SIZE` is not a tuning knob.** It has to stay at or above 3× (concurrent
+sweeps + drains). See the sentence above for why.
+
+**Lock ordering is contracted.** Batch advisory lock first, then row lock, always — see
+`docs/adr/0011-lock-ordering-in-the-money-path.md`. Two code paths that touch the same
+reconciliation item under *different* lock domains is not a style disagreement, it is a
+duplicate settlement. That is exactly what PAY-2041 was; the postmortem is in
+`docs/postmortems/2041-duplicate-settlement.md` and it is worth twenty minutes.
+
+**Idempotency is a database constraint, not an `if`.** `ledger_transaction.idempotency_key`
+has been UNIQUE since migration `0020`. Claim the key inside the transaction
+(`claim_idempotency_key`); do not SELECT, check, and then INSERT.
+`find_by_idempotency_key` still exists for the CLI and one audit query — it is not on the
+money path any more and must not go back on it.
+
+**Publish through the outbox.** `OutboxPublisher` writes in the caller's transaction and rolls
+back with it. `SnsPublisher` has exactly one caller (`OutboxDrainJob`). If you publish
+directly to SNS from a service you will eventually emit an event for a transaction that never
+committed.
+
+**In-process tests cannot see concurrency.** The default `session` fixture is one connection on
+one event loop. A test that "proves" two workers cannot collide, written against that fixture,
+proves nothing — we have the postmortem to show for it. Anything about racing goes in
+`tests/integration/` against the real `pg_engine` fixture, with `@pytest.mark.integration`.
+
+**There are two settlement parsers and that is correct.** Worldflow files are CSV, Nordpay
+still files fixed-width. `LegacyFixedWidthParser` is not dead code and there is no plan to
+converge them until Nordpay changes their platform.
+
+**`capture_at_settlement` is a column, not a flag.** `SettlementPoster` reads it off the
+**charge** row, never the merchant row. The merchant row is a projection and can be newer than
+the charge.
+
+**Never log a PAN.** We do not store one — projections hold `account_number_token` and
+`*_last_four` and nothing else — and `RedactingFormatter` is a backstop, not a licence.
+`FLAG_REDACT_PAN_IN_LOGS` stays on. Compliance signed off assuming it always is.
+
+**Migrations are linear.** One head, ever. If `alembic heads` returns two lines, rebase — do
+not create a merge revision. CI checks this, and also checks that your downgrade actually runs.
+
+---
+
+## Contracts and the outside world
+
+Request/response types and event payloads come from **payzeno-contracts** (`payzeno-contracts==3.4.0`,
+internal index). `app/api/schemas.py` re-exports them; this repo does not define its own copy
+of a shared type, and there is no local `EventEnvelope`.
+
+`contracts/ledger-openapi.json` is a committed snapshot of our OpenAPI document. payzeno-api's
+contract test reads it. If you change a route signature, run `make openapi`, commit the diff,
+and tell Platform in `#payzeno-platform` — CI will fail their build otherwise and they will
+find out from a red pipeline instead of from you.
+
+Events we emit on `payzeno-ledger-events`: `settlement.batch_closed`, `settlement.item_settled`,
+`settlement.completed`, `settlement.reconciliation_failed`, `settlement.duplicate_detected`,
+`settlement.variance_detected`, `settlement.funded`, `payout.scheduled`, `payout.paid`,
+`payout.failed`, `payout.returned`, `ledger.transaction_posted`, `ledger.imbalance_detected`.
+
+Events we consume: `payment.*`, `refund.created`, `dispute.*` on `payzeno-ledger-payments`;
+`merchant.*` on `payzeno-ledger-merchants`.
 
 ---
 
