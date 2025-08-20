@@ -33,3 +33,14 @@ compatible with Java's `LegacyBlendedFeeCalculator` so the parity tests can run 
 the same fixtures. It was marked deprecated in month 4 and is still reached by one branch of
 `apportion_fee`, because the merchants on the old blended pricing model have not been
 migrated and nobody has scheduled it.
+
+## The open disagreement
+
+Step 4 moves invoice *lines*. It does **not** move invoice *numbering*, and that is the
+argument. nmigration's position is that a ledger that stages lines but cannot issue a number
+is a half-migration that will sit there for a year; dhotfix's is that invoice numbering is a
+statutory sequence per jurisdiction, that `SequentialInvoiceNumberGenerator` has a
+per-country ruleset nobody has written down, and that the ledger has no business owning a
+legal artifact it cannot validate.
+
+It is unresolved. `migrations/0022` and `app/models/invoice_line_staging.py` exist, the
