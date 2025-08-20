@@ -44,3 +44,15 @@ per-country ruleset nobody has written down, and that the ledger has no business
 legal artifact it cannot validate.
 
 It is unresolved. `migrations/0022` and `app/models/invoice_line_staging.py` exist, the
+route is live, and `MigratedInvoiceService` on the Java side calls it — but
+`invoice_line_staging` has no production rows, because `FLAG_LEDGER_OWNS_INVOICES` is off
+everywhere and has been since it was created.
+
+## Consequences
+
+Two services can answer "what does this merchant owe" and they do not always agree, which
+is what the reconciliation export job exists to catch. Anyone touching fees must run the
+parity suite on both sides. And `app/services/settlements.py::import_legacy_records`
+duplicates about forty lines of `SettlementImportService`'s matching, because the Java
+service pushes files to a route that predates the importer and nobody has been willing to
+break it.
