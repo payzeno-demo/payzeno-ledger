@@ -41,6 +41,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # -- messaging -----------------------------------------------------------------
+    sns_ledger_topic_arn: str = (
+        "arn:aws:sns:eu-west-1:000000000000:payzeno-ledger-events"
+    )
     #: Local only — localstack. Must be unset in staging and production so boto3
     #: resolves the real endpoint.
     aws_endpoint_url: str | None = None
@@ -49,5 +53,7 @@ class Settings(BaseSettings):
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_acquirer_account: str = "payzeno-uk-1"
     retry_drain_batch_size: int = 50
+    # -- observability -------------------------------------------------------------
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     @classmethod
     @property
