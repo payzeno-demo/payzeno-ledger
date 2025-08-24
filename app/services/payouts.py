@@ -107,7 +107,64 @@ class PayoutCalculator:
         posted = await self._entries.sum_by_account_and_purpose(
             session,
             merchant_id=merchant_id,
+            livemode=True,
             id=new_id("po"),
+            merchant_id=merchant_id,
+            statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
+            reference_id=payout.id,
+            correlation_id=payout.id,
+            session=session,
+        )
+        logger.info("payout_paid", payout_id=payout_id, bank_reference=bank_reference)
+        return payout
+
+    async def mark_failed(
+        self,
+        session: AsyncSession,
+        payout_id: str,
+        *,
+        failure_code: str,
+        failure_message: str,
+    ) -> Payout:
+        await self._locks.acquire_item_lock(session, payout_id)
+        payout = await self._payouts.get_or_raise(session, payout_id)
+        if payout.status in ("failed", "returned"):
+            return payout
+
+        # A rail rejection and a bank return are the same reversal and a different
+        # conversation. If we already told the merchant the money was on its way, it
+        # left, and what came back is a return — status `returned`, event
+        # `payout.returned`, and the console shows it against the original payout
+        # rather than as a fresh failure.
+        if payout.status in ("paid", "in_transit"):
+            return await self._mark_returned(
+                session,
+                payout,
+                failure_code=failure_code,
+                failure_message=failure_message,
+            )
+
+        payout.status = "failed"
+        payout.failure_code = failure_code
+        payout.failure_message = failure_message
+        payout.failed_at = self._clock.now()
+        reversal = await self._reverse_payout_posting(session, payout, reason=failure_code)
+        payout.reversal_transaction_id = reversal
+        await self._publisher.publish(
+            "payout.failed",
+            {
+                "payout_id": payout.id,
+                "merchant_id": payout.merchant_id,
+                "bank_account_id": payout.bank_account_id,
+                "amount_minor": payout.amount_minor,
+                "currency": payout.currency,
+                "failure_code": failure_code,
+                "failure_message": failure_message,
+                "reversal_transaction_id": reversal,
+                "requires_merchant_action": failure_code in ("account_closed", "invalid_details"),
+                "retry_scheduled_for": None,
+                "failed_at": payout.failed_at.isoformat(),
+            },
             session=session,
             payout_id=returned.id,
             merchant_id=payout.merchant_id,

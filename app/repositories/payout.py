@@ -68,6 +68,27 @@ class PayoutRepository(BaseRepository[Payout]):
         *,
         merchant_id: str,
         currency: str,
+        """Record that the rail accepted the instruction."""
+        payout = await self.get_or_raise(session, payout_id)
+        payout.status = "in_transit"
+        payout.initiated_at = at
+        if rail_reference is not None:
+            payout.bank_reference = rail_reference
+        await session.flush()
+        return payout
+
+    async def mark_paid(
+        self,
+        session: AsyncSession,
+        payout_id: str,
+        *,
+        paid_at: dt.datetime,
+        bank_reference: str,
+    ) -> Payout:
+        """Record settlement at the destination bank.
+
+        ``paid`` is **not** terminal for ACH: an R-code return can arrive up to sixty days
+        later, which is what :meth:`mark_returned` is for.
         """
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "paid"
@@ -84,3 +105,12 @@ class PayoutRepository(BaseRepository[Payout]):
         failure_code: str,
         failure_message: str,
         reversal_transaction_id: str,
+        at: dt.datetime | None = None,
+    ) -> Payout:
+        """Terminal failure, with the compensating posting that gives the money back.
+
+        ``reversal_transaction_id`` is required and not optional. ``chk_payout_reversal_
+        present`` will reject the row without it, and that constraint exists because the
+        alternative — a terminal ``failed`` payout whose debit of ``merchant_payable`` is
+        never reversed — destroys the merchant's balance permanently. Invariant (7) of
+        `data-model.md` §6 checks it nightly.
