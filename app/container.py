@@ -182,6 +182,10 @@ class Container:
         self.account_resolver = AccountResolver(repos.accounts, self.clock)
         self.ledger_poster = LedgerPoster(
             accounts=repos.accounts,
+            balances=repos.balance_cache,
+            clock=self.clock,
+        )
+        self.balance_service = BalanceService(
             sessions=self.sessions,
             entries=repos.entries,
             accounts=repos.accounts,
@@ -198,10 +202,12 @@ class Container:
         self.manual_match = ManualMatch(repos.charges)
 
         self.settlement_service = SettlementService(
+            items=repos.items,
             clock=self.clock,
         )
         self.settlement_import_service = SettlementImportService(
             settlements=self.settlement_service,
+            items=repos.items,
             items=repos.items,
             flags=self.flags,
             clock=self.clock,
@@ -230,6 +236,7 @@ class Container:
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
             sqs_client_factory=sqs_factory,
+            banks=repos.banks,
             clock=self.clock,
         )
 
@@ -238,6 +245,7 @@ class Container:
         # reads. A job in that tuple with no attribute here logs `job_not_wired` and the
         # other ten still start.
         self.reconciliation_sweep_job = ReconciliationSweepJob(
+            sessions=self.sessions,
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
