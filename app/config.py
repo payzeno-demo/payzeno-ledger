@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # -- internal auth -------------------------------------------------------------
+    #: Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's
+    #: PAYZENO_INTERNAL_SECRET. All three must match or nothing talks to us.
+    internal_api_secret: str = "dev-internal-secret-do-not-use-anywhere-real"
+
     # -- messaging -----------------------------------------------------------------
     sns_ledger_topic_arn: str = (
         "arn:aws:sns:eu-west-1:000000000000:payzeno-ledger-events"
@@ -49,6 +54,8 @@ class Settings(BaseSettings):
     #: resolves the real endpoint.
     aws_endpoint_url: str | None = None
 
+    #: BREAKER_WINDOW is a request COUNT, not a duration.
+    worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_acquirer_account: str = "payzeno-uk-1"
@@ -57,3 +64,23 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     @classmethod
     @property
+    def alembic_database_url(self) -> str:
+        """The same DSN with the sync driver, for Alembic.
+
+        Alembic runs its own connection outside the app's engine and psycopg is the
+        driver its autogenerate support is tested against.
+        """
+        return self.database_url.replace("+asyncpg", "").replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """The process-wide settings object.
+
+    Memoised because ``BaseSettings`` re-reads ``.env`` on every construction and the
+    container, the CLI and the Alembic runner all want the same values. Tests that need
+    different values construct ``Settings`` directly instead of clearing this cache.
+    """
+    return Settings()
