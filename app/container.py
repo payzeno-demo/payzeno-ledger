@@ -187,6 +187,7 @@ class Container:
         )
         self.balance_service = BalanceService(
             sessions=self.sessions,
+            balances=repos.balance_cache,
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
@@ -208,6 +209,8 @@ class Container:
         self.settlement_import_service = SettlementImportService(
             settlements=self.settlement_service,
             items=repos.items,
+            publisher=self.publisher,
+            sessions=self.sessions,
             items=repos.items,
             flags=self.flags,
             clock=self.clock,
@@ -220,6 +223,7 @@ class Container:
         self.calendar = BankingCalendar()
         self.payout_calculator = PayoutCalculator(
             calculator=self.payout_calculator,
+            banks=repos.banks,
             settings=settings,
             fundings=repos.fundings,
             batches=repos.batches,
@@ -229,6 +233,9 @@ class Container:
             clock=self.clock,
         )
         self.invoice_service = InvoiceStagingService(
+            clock=self.clock,
+        )
+        self.adjustment_service = AdjustmentService(
             requests=repos.adjustments, ledger=self.ledger_poster, clock=self.clock
         )
 
@@ -249,6 +256,7 @@ class Container:
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
+            clock=self.clock,
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(

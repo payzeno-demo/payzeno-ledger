@@ -1,0 +1,65 @@
+"""``settlement_batch`` data access.
+
+A batch is one acquirer settlement file: one acquirer, one currency, one processing day.
+``SettlementImportService`` is the only thing that creates one, and
+``uq_settlement_batch_file (acquirer, file_reference)`` is what makes importing the same
+file twice a no-op rather than a duplicated day of money.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from typing import Any, ClassVar
+
+from sqlalchemy import ColumnElement, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.errors import BatchNotFoundError
+from app.models.settlement_batch import SettlementBatch
+from app.repositories.base import BaseRepository
+
+#: Statuses the sweep will pick a batch up from. ``partially_reconciled`` is in here on
+#: purpose: it is the state that keeps a retry backlog alive, it is normal, and it is the
+#: state the arc INC race needed.
+RECONCILABLE_STATUSES: tuple[str, ...] = ("closed", "partially_reconciled")
+
+
+class SettlementBatchRepository(BaseRepository[SettlementBatch]):
+    """Reads and writes ``settlement_batch`` rows."""
+
+    model: ClassVar[type[SettlementBatch]] = SettlementBatch
+    not_found_error: ClassVar[type[BatchNotFoundError]] = BatchNotFoundError
+
+    def _default_order(self) -> ColumnElement[Any]:
+        return SettlementBatch.id
+
+    async def find_by_file(
+        self, session: AsyncSession, *, acquirer: str, file_reference: str
+    ) -> SettlementBatch | None:
+        """Look a batch up by the acquirer's own file reference.
+
+        The import service calls this before opening anything. If the acquirer re-files
+        the same reference — which both of ours do after a partial upload — the import is
+        skipped rather than producing a second batch of the same money. The unique index
+        is the backstop; this read is what keeps the log quiet.
+        """
+        stmt = (
+            select(SettlementBatch)
+            .where(SettlementBatch.acquirer == acquirer)
+            .where(SettlementBatch.file_reference == file_reference)
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def list_by_status(
+        self, session: AsyncSession, statuses: tuple[str, ...]
+    ) -> list[SettlementBatch]:
+        """Batches in any of ``statuses``, oldest processing date first.
+
+        The sweep calls this with :data:`RECONCILABLE_STATUSES` once per tick and then
+        works the ids. An empty tuple returns an empty list rather than the whole table —
+        ``IN ()`` is not valid SQL and "no filter" would be a spectacular way to read
+        every batch Payzeno has ever settled.
+        """
+        if not statuses:
+            return []
+        on_or_before: dt.date | None = None,
