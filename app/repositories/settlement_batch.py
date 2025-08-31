@@ -63,3 +63,12 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         if not statuses:
             return []
         on_or_before: dt.date | None = None,
+        """
+        batch = await self.get_or_raise(session, batch_id)
+        batch.posted_total_minor += amount_minor
+        await session.flush()
+        return batch
+
+    async def mark_status(
+        self, session: AsyncSession, batch_id: str, *, status: str
+    ) -> SettlementBatch:
