@@ -1,0 +1,44 @@
+"""`SettlementBatchRepository` — app/repositories/settlement_batch.py.
+
+`list_by_status` is what `ReconciliationSweepJob` calls every 900 seconds to decide what to
+work on, and it is the reason `partially_reconciled` has to be in that tuple: a batch with
+retryable items left over is exactly the batch the sweep needs to come back to. It is also,
+therefore, the state the arc INC race needs, and it is entirely normal.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from app.errors import BatchNotFoundError
+from app.repositories.settlement_batch import SettlementBatchRepository
+from tests.factories import make_batch
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+
+async def test_list_by_status_with_an_empty_tuple_returns_nothing(
+    session, repo: SettlementBatchRepository
+) -> None:
+    await repo.add(session, make_batch(batch_id="sb_rb_5", status="closed"))
+    await session.flush()
+
+    assert await repo.list_by_status(session, ()) == []
+
+
+async def test_mark_status_transitions(session, repo: SettlementBatchRepository) -> None:
+    batch = make_batch(batch_id="sb_rb_7", status="open")
+    await repo.add(session, batch)
+    await session.flush()
+
+    closed = await repo.mark_status(session, "sb_rb_7", status="closed")
+    assert closed.status == "closed"
+    assert closed.closed_at is not None
+
+    reconciled = await repo.mark_status(session, "sb_rb_7", status="reconciled")
+    assert reconciled.reconciled_at is not None
+
+
