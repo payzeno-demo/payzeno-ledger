@@ -84,6 +84,66 @@ class NotFoundError(PayzenoLedgerError):
     legible error, but there is also no reason to leak which merchants exist.
     """
 
+    http_status: ClassVar[int] = 404
+
+
+class AccountNotFoundError(NotFoundError):
+    """No ``account`` row. Raised by ``AccountRepository.get_or_raise``.
+
+    Almost always a caller bug rather than a data problem: ``AccountResolver`` creates
+    the chart-of-accounts rows lazily, so a missing account means someone asked for a
+    ``(merchant, type, currency, livemode)`` tuple that is not a real account shape.
+    """
+
+
+class TransactionNotFoundError(NotFoundError):
+    """No ``ledger_transaction`` row. Raised by ``LedgerTransactionRepository``."""
+
+
+class BatchNotFoundError(NotFoundError):
+    """No ``settlement_batch`` row. Raised by ``SettlementBatchRepository``."""
+
+
+class ReconciliationItemNotFoundError(NotFoundError):
+    """No ``reconciliation_item`` row.
+
+    Reachable from the retry route with a stale id — the console keeps item ids in a
+    query cache and an operator can click retry on a batch that was archived under them.
+    """
+
+
+class ChargeProjectionNotFoundError(NotFoundError):
+    """No ``settlement_charge`` projection for a matched ``charge_id``.
+
+    This means the projection is *behind*, not that the charge does not exist:
+    ``payment.authorized`` has not been consumed yet. It is distinct from
+    :class:`OrphanedItemError`, which is an item that was never matched at all — the
+    poster checks ``item.charge_id is None`` first precisely so the two never blur.
+    """
+
+
+class BankAccountProjectionNotFoundError(NotFoundError):
+    """No ``bank_account_projection`` for the merchant.
+
+    Raised by ``BankAccountProjectionRepository.get_default``. A payout cannot be
+    initiated without one and the rails all fail closed.
+    """
+
+
+# ---------------------------------------------------------------------------------------
+# Ledger integrity — the only genuinely 500-class failures in the tree
+# ---------------------------------------------------------------------------------------
+
+
+class LedgerIntegrityError(PayzenoLedgerError):
+    """A double-entry invariant does not hold.
+
+    This one really is a server fault: either the posting rules produced something
+    unbalanced or the stored state has drifted. ``LedgerAuditService`` raises it from the
+    nightly trial balance and publishes ``ledger.imbalance_detected`` alongside.
+    """
+
+    code: ClassVar[str] = "ledger_imbalance"
     http_status: ClassVar[int] = 500
 
 
@@ -128,6 +188,17 @@ class IdempotencyConflictError(PayzenoLedgerError):
     """
 
     code: ClassVar[str] = "duplicate_settlement"
+    http_status: ClassVar[int] = 409
+
+
+class OrphanedItemError(SettlementError):
+    """The reconciliation item has no matched charge.
+
+    Raised in ``SettlementPoster.post_settlement`` on ``item.charge_id is None``,
+    **before** ``SettlementChargeRepository.get_or_raise``, so an unmatched acquirer line
+    reports itself as unmatched rather than as a missing projection.
+    """
+
     code: ClassVar[str] = "retry_exhausted"
 
 
@@ -179,3 +250,4 @@ class DualControlRequiredError(PayzenoLedgerError):
     record which one, because dual control is meaningless otherwise.
     """
 
+    code: ClassVar[str] = "internal_error"
