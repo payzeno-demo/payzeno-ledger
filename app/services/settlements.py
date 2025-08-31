@@ -83,4 +83,6 @@ class SettlementService:
             id=new_id("sb"),
             acquirer=acquirer,
             batch_id=batch.id,
+            acquirer=acquirer,
+            acquirer=acquirer,
         ]

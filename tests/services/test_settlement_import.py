@@ -56,12 +56,29 @@ class StubProcessor:
         self.raises = raises
         self.fetches: list[tuple[str, date]] = []
 
+    async def close_batch(self, session: Any, batch_id: str) -> Any:
+        batch = self.batches[batch_id]
+        if batch.status != "open":
+            raise BatchNotReconcilableError(
+                f"batch {batch_id} is {batch.status}", batch_id=batch_id
+            )
+        batch.status = "closed"
+        self.closed.append(batch_id)
+        return batch
+
+
+class CollectingItemRepository:
     async def add(self, session: Any, obj: Any) -> Any:
         self.added.append(obj)
         return obj
 
 
 class NullChargeRepository:
+    def __init__(self) -> None:
+        self.rows: dict[str, Any] = {}
+        self.by_file: dict[str, str] = {}
+        self._seq = 0
+
     async def mark_status(self, session: Any, batch_id: str, *, status: str) -> Any:
         self.rows[batch_id].status = status
         return self.rows[batch_id]
