@@ -56,6 +56,21 @@ class StubProcessor:
         self.raises = raises
         self.fetches: list[tuple[str, date]] = []
 
+    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+        self.fetches.append((acquirer, processing_date))
+        if self.raises is not None:
+            raise self.raises
+        return self.payload
+
+
+class RecordingSettlementService(SettlementService):
+    """The real class's surface with in-memory batches.
+
+    Subclassed rather than mocked so `import_file` still calls `open_batch` and
+    `close_batch` by name and still gets `BatchNotReconcilableError` out of the real
+    guard when the state machine is violated.
+    """
+
     async def close_batch(self, session: Any, batch_id: str) -> Any:
         batch = self.batches[batch_id]
         if batch.status != "open":
@@ -78,6 +93,9 @@ class NullChargeRepository:
         self.rows: dict[str, Any] = {}
         self.by_file: dict[str, str] = {}
         self._seq = 0
+
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        return self.rows[entity_id]
 
     async def mark_status(self, session: Any, batch_id: str, *, status: str) -> Any:
         self.rows[batch_id].status = status

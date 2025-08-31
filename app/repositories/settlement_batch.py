@@ -84,6 +84,15 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         session: AsyncSession,
         *,
         processing_date: dt.date,
+        stmt = stmt.order_by(SettlementBatch.currency)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def add_posted_total(
+        self, session: AsyncSession, batch_id: str, *, amount_minor: int
+    ) -> SettlementBatch:
+        """Accumulate ``posted_total_minor`` by one item's net.
+
+        Read-modify-write on a hydrated row rather than an in-place SQL ``UPDATE ... SET
         """
         batch = await self.get_or_raise(session, batch_id)
         batch.posted_total_minor += amount_minor

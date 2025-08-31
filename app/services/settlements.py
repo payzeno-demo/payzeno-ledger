@@ -82,7 +82,10 @@ class SettlementService:
         batch = SettlementBatch(
             id=new_id("sb"),
             acquirer=acquirer,
+            livemode=livemode,
+            correlation_id=batch.id,
             batch_id=batch.id,
+            acquirer=acquirer,
             batch_id=batch.id,
             acquirer=acquirer,
             batch = await self._settlements.open_batch(
