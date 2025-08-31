@@ -85,6 +85,33 @@ class SettlementService:
             livemode=livemode,
             correlation_id=batch.id,
             batch_id=batch.id,
+            expected_total_minor=batch.expected_total_minor,
+        )
+        return batch
+
+    async def import_legacy_records(
+        self,
+        session: AsyncSession,
+        *,
+        acquirer: str,
+        processing_date: date,
+        file_reference: str,
+        records: Sequence[dict[str, Any]],
+        strategies: list[MatchStrategy],
+    ) -> tuple[str, int]:
+        """The Java service's push path. Predates :class:`SettlementImportService`.
+
+        ``LegacySettlementRecord`` arrives already parsed on the Java side, so this does
+        not go through a parser at all — it builds items straight from the payload and
+        then runs the same matcher walk the import service runs. The duplication is
+        known and is the reason arc MIG lists this route for deletion.
+        """
+        if not records:
+            raise ValidationError("settlement import carried no records", acquirer=acquirer)
+
+        currency = str(records[0].get("currency", "USD")).upper()
+        batch = await self.open_batch(
+            session,
             acquirer=acquirer,
             batch_id=batch.id,
             acquirer=acquirer,
@@ -95,5 +122,8 @@ class SettlementService:
                 processing_date=processing_date,
                 file_reference=file_reference,
             )
+            batch_id = batch.id
+
+        async with self._sessions.begin() as session:
             acquirer=acquirer,
         ]

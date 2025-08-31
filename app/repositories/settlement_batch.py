@@ -62,7 +62,18 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         """
         if not statuses:
             return []
+        currency: str | None = None,
         on_or_before: dt.date | None = None,
+        limit: int = 200,
+    ) -> list[SettlementBatch]:
+        """Reconciled batches that no bank credit has matched yet.
+
+        Drives ``FundingMatchJob``: a batch stays here until a ``funding_event`` lands
+        within ``FUNDING_MATCH_TOLERANCE_BPS`` of its ``expected_total_minor``. Uses
+        ``pix_settlement_batch_unfunded``.
+
+        Cash follows the bank, not the file. A batch that sits in this list for days is an
+        acquirer that filed and did not pay, and the merchant must not be paid out of it.
         """
         stmt = (
             select(SettlementBatch)
