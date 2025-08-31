@@ -62,4 +62,62 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         """
         if not statuses:
             return []
+        currency: str | None = None,
         on_or_before: dt.date | None = None,
+        limit: int = 200,
+    ) -> list[SettlementBatch]:
+        """Reconciled batches that no bank credit has matched yet.
+
+        Drives ``FundingMatchJob``: a batch stays here until a ``funding_event`` lands
+        within ``FUNDING_MATCH_TOLERANCE_BPS`` of its ``expected_total_minor``. Uses
+        ``pix_settlement_batch_unfunded``.
+
+        Cash follows the bank, not the file. A batch that sits in this list for days is an
+        acquirer that filed and did not pay, and the merchant must not be paid out of it.
+        """
+        stmt = (
+            select(SettlementBatch)
+            .where(SettlementBatch.status == "reconciled")
+            .where(SettlementBatch.funded_at.is_(None))
+            .order_by(SettlementBatch.processing_date)
+            .limit(limit)
+        )
+        if acquirer is not None:
+            stmt = stmt.where(SettlementBatch.acquirer == acquirer)
+        if currency is not None:
+            stmt = stmt.where(SettlementBatch.currency == currency)
+        if on_or_before is not None:
+            stmt = stmt.where(SettlementBatch.processing_date <= on_or_before)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_for_processing_date(
+        self,
+        session: AsyncSession,
+        *,
+        processing_date: dt.date,
+        stmt = stmt.order_by(SettlementBatch.currency)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def add_posted_total(
+        self, session: AsyncSession, batch_id: str, *, amount_minor: int
+    ) -> SettlementBatch:
+        """Accumulate ``posted_total_minor`` by one item's net.
+
+        Read-modify-write on a hydrated row rather than an in-place SQL ``UPDATE ... SET
+        """
+        batch = await self.get_or_raise(session, batch_id)
+        batch.posted_total_minor += amount_minor
+        await session.flush()
+        return batch
+
+    async def mark_status(
+        self, session: AsyncSession, batch_id: str, *, status: str
+    ) -> SettlementBatch:
+        """
+        batch = await self.get_or_raise(session, batch_id)
+        batch.status = "funded"
+        batch.funding_event_id = funding_event_id
+        batch.funded_amount_minor = funded_amount_minor
+        batch.funded_at = at
+        await session.flush()
+        return batch

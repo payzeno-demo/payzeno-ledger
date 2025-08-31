@@ -99,6 +99,37 @@ be changed with a task restart instead of a redeploy. That mattered once.
 
 ---
 
+## Layout
+
+```
+app/
+  config.py errors.py ports.py flags.py clock.py    the layer everything imports
+  domain/          pure logic. imports errors + payzeno_contracts. nothing else.
+    rules/         the 19 PostingRules — one class per canonical posting
+  models/          SQLAlchemy declarative. 20 tables, indexes in __table_args__
+  repositories/    data access. STATELESS — the session is a parameter, not a field
+  db/              PooledSessionFactory, AdvisoryLockManager
+  clients/         Worldflow + Nordpay behind a circuit breaker
+  publishers/      the outbox (business path) and SNS (drain only)
+  services/        business logic. owns transactions.
+    reconciliation/  sweep, retry, matcher, poster, backlog
+    rails/           the four payout initiators
+  consumers/       two SQS consumers, insert-first dedupe
+  workers/         the 11 jobs above
+  api/             thin routers. no business logic. every route has a response_model.
+  middleware/      six, in a contracted order
+  ops/             the operator CLI
+migrations/        alembic, 0001 -> 0033, linear
+tests/             pytest, seven layers mirroring app/
+```
+
+**Imports flow downward only.** `domain` never imports `services`, `models` never imports
+`repositories`, and nothing outside `app/config.py` reads the environment. ADR 0002 has the
+argument; the ruff config has the enforcement (`ban-relative-imports = "all"`, so the layer is
+readable from the import line).
+
+---
+
 ## Gotchas
 
 Read these before your first PR. Most of them are here because of something that already
@@ -171,3 +202,14 @@ Events we consume: `payment.*`, `refund.created`, `dispute.*` on `payzeno-ledger
 
 ---
 
+## Docs
+
+- `docs/adr/0002-layering-and-import-direction.md` — why the import direction is enforced
+- `docs/adr/0007-strangle-billing-legacy.md` — the migration off the Java biller
+- `docs/adr/0009-double-entry-invariants.md` — the five invariants and why they are in code
+- `docs/adr/0010-partial-indexes-on-hot-paths.md` — the settlement query regression
+- `docs/adr/0011-lock-ordering-in-the-money-path.md` — **read this one**
+- `docs/runbooks/reconciliation.md`, `docs/runbooks/payouts.md`, `docs/runbooks/settlement-import.md`
+- `docs/postmortems/2041-duplicate-settlement.md`
+
+Questions: `#payzeno-core-payments`. Pages: Infrastructure carries them, we own the fix.
