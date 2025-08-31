@@ -83,6 +83,14 @@ class SettlementService:
             id=new_id("sb"),
             acquirer=acquirer,
             batch_id=batch.id,
+            batch_id=batch.id,
             acquirer=acquirer,
+            batch = await self._settlements.open_batch(
+                session,
+                acquirer=acquirer,
+                currency=currency,
+                processing_date=processing_date,
+                file_reference=file_reference,
+            )
             acquirer=acquirer,
         ]

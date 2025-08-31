@@ -64,6 +64,27 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
             return []
         on_or_before: dt.date | None = None,
         """
+        stmt = (
+            select(SettlementBatch)
+            .where(SettlementBatch.status == "reconciled")
+            .where(SettlementBatch.funded_at.is_(None))
+            .order_by(SettlementBatch.processing_date)
+            .limit(limit)
+        )
+        if acquirer is not None:
+            stmt = stmt.where(SettlementBatch.acquirer == acquirer)
+        if currency is not None:
+            stmt = stmt.where(SettlementBatch.currency == currency)
+        if on_or_before is not None:
+            stmt = stmt.where(SettlementBatch.processing_date <= on_or_before)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_for_processing_date(
+        self,
+        session: AsyncSession,
+        *,
+        processing_date: dt.date,
+        """
         batch = await self.get_or_raise(session, batch_id)
         batch.posted_total_minor += amount_minor
         await session.flush()
@@ -72,3 +93,11 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
     async def mark_status(
         self, session: AsyncSession, batch_id: str, *, status: str
     ) -> SettlementBatch:
+        """
+        batch = await self.get_or_raise(session, batch_id)
+        batch.status = "funded"
+        batch.funding_event_id = funding_event_id
+        batch.funded_amount_minor = funded_amount_minor
+        batch.funded_at = at
+        await session.flush()
+        return batch
