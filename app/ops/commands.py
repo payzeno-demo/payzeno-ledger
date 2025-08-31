@@ -46,6 +46,19 @@ def print_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
         print("(no rows)")
         return
     cells = [[("" if value is None else str(value)) for value in row] for row in rows]
+    widths = [
+        max(len(str(headers[index])), *(len(row[index]) for row in cells))
+        for index in range(len(headers))
+    ]
+    line = "  ".join(str(headers[i]).ljust(widths[i]) for i in range(len(headers)))
+    print(line)
+    print("  ".join("-" * widths[i] for i in range(len(headers))))
+    for row in cells:
+        print("  ".join(row[i].ljust(widths[i]) for i in range(len(headers))))
+    print(f"\n{len(cells)} row(s)")
+
+
+async def cmd_backlog(
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
