@@ -50,6 +50,39 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     __tablename__ = "settlement_batch"
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     processing_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    reconciled_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        # An acquirer re-filing the same reference is an at-least-once delivery, not a
+        # second batch. SettlementImportService leans on this to be idempotent.
+        Index("uq_settlement_batch_file", "acquirer", "file_reference", unique=True),
+        Index(
+            "ix_settlement_batch_status_date",
+            "status",
+            "processing_date",
+            postgresql_ops={"processing_date": "DESC"},
+        ),
+        # Migration 0021, arc PERF: the monthly finance export filtered by currency and
+        # date and was using the status index, then throwing away 90% of the rows.
+        Index(
+            "ix_settlement_batch_currency_date",
+            "currency",
+            "processing_date",
+            postgresql_ops={"processing_date": "DESC"},
+        ),
+        # FundingMatchJob's driving index — reconciled batches still waiting for cash.
+        Index(
+            "pix_settlement_batch_unfunded",
+            "processing_date",
+            postgresql_where="status = 'reconciled' and funded_at is null",
+        ),
+    )
+
+    def is_sweepable(self) -> bool:
+        """Whether ``ReconciliationSweepJob`` should pick this batch up."""
+        return self.status in SWEEPABLE_STATUSES
+
     def overposted_ratio(self) -> float:
         """``posted_total_minor / expected_total_minor``, or 0.0 when nothing is expected.
 
