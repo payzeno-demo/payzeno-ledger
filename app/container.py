@@ -191,6 +191,7 @@ class Container:
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
+            flags=self.flags,
             metrics=metrics,
             clock=self.clock,
         )
@@ -207,6 +208,7 @@ class Container:
             clock=self.clock,
         )
         self.settlement_import_service = SettlementImportService(
+            sessions=self.sessions,
             settlements=self.settlement_service,
             items=repos.items,
             publisher=self.publisher,
@@ -222,12 +224,32 @@ class Container:
         # calendar has no row for, which is a weekend-only answer and always right.
         self.calendar = BankingCalendar()
         self.payout_calculator = PayoutCalculator(
+            entries=repos.entries, payouts=repos.payouts, merchants=repos.merchants
+        )
+        self.payout_initiators = {
+            AchPayoutInitiator.method: AchPayoutInitiator(
+                settings, self.calendar, self.clock
+            ),
+            SameDayAchPayoutInitiator.method: SameDayAchPayoutInitiator(
+                settings, self.calendar, self.clock
+            ),
+            SepaPayoutInitiator.method: SepaPayoutInitiator(
+                settings, self.calendar, self.clock
+            ),
+            FasterPaymentsPayoutInitiator.method: FasterPaymentsPayoutInitiator(
+                settings, self.calendar, self.clock
+            ),
+        }
+        self.payout_service = PayoutService(
             calculator=self.payout_calculator,
             banks=repos.banks,
             settings=settings,
             fundings=repos.fundings,
             batches=repos.batches,
             publisher=self.publisher,
+            clock=self.clock,
+        )
+        self.capture_service = DeferredCaptureService(
             attempts=repos.captures,
             processor=self.processor,
             clock=self.clock,
@@ -260,6 +282,10 @@ class Container:
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
+            clock=self.clock,
+            settings=settings,
+        )
+        self.reserve_release_job = ReserveReleaseJob(
             repositories=repos,
             sessions=self.sessions,
             publisher=self.sns_publisher,
