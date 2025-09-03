@@ -59,7 +59,11 @@ class Settings(BaseSettings):
     worldflow_breaker_window: int = 100
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_acquirer_account: str = "payzeno-uk-1"
+    # -- retry drain ---------------------------------------------------------------
+    retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
+    payout_cutoff_faster_payments_utc: str = "17:30"
+
     # -- observability -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     @classmethod
