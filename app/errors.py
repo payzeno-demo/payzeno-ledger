@@ -73,6 +73,17 @@ class PayzenoLedgerError(Exception):
     #: Stable machine-readable code. The console switches on it; do not reword.
     code: ClassVar[str] = "internal_error"
 
+    def __init__(self, message: str | None = None, /, **details: Any) -> None:
+        # `code` is normally a class fact. Two conditions genuinely carry a *runtime*
+        # code — the acquirer's, forwarded verbatim — and those pass it as a keyword.
+        # See RetryableSettlementError and the UpstreamError branch in app/clients/http.py.
+        override = details.pop("code", None)
+        if override is not None:
+            self.code = str(override)
+        self.message = message or self.code
+        self.details: dict[str, Any] = details
+        super().__init__(self.message)
+
     http_status: ClassVar[int] = 422
 
 
@@ -177,6 +188,7 @@ class CurrencyMismatchError(LedgerIntegrityError):
     transaction to be tolerant of.
     """
 
+    code: ClassVar[str] = "account_frozen"
     http_status: ClassVar[int] = 409
 
 
@@ -197,6 +209,17 @@ class OrphanedItemError(SettlementError):
     Raised in ``SettlementPoster.post_settlement`` on ``item.charge_id is None``,
     **before** ``SettlementChargeRepository.get_or_raise``, so an unmatched acquirer line
     reports itself as unmatched rather than as a missing projection.
+    """
+
+    code: ClassVar[str] = "settlement_variance_exceeded"
+
+
+class RetryExhaustedError(SettlementError):
+    """``attempt_count`` reached ``Settings.reconcile_max_attempts``.
+
+    Read off ``Settings`` and not off ``constants.MAX_ATTEMPTS`` — the constant is only
+    the default. During PAY-2041 the ceiling was changed at 01:44 without a deploy, and
+    that is only possible because the read path is the settings object.
     """
 
     code: ClassVar[str] = "retry_exhausted"
