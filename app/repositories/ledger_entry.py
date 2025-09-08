@@ -130,6 +130,53 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         account_id: str,
         from_: dt.datetime,
         to: dt.datetime,
+        interval: str = "day",
+    ) -> list[BalanceBucketRow]:
+        """Movement on one account, bucketed by hour or day, oldest first.
+
+        Backs ``GET /internal/v1/balances/{merchantId}/history``. The running balance is
+        accumulated by the caller rather than by a window function, because the endpoint
+        also needs the opening balance, which comes from a different query anyway.
+        stmt = (
+            select(bucket, func.coalesce(signed, 0))
+            .where(LedgerEntry.account_id == account_id)
+            .where(LedgerEntry.created_at >= from_)
+            .where(LedgerEntry.created_at < to)
+            .group_by(bucket)
+            .order_by(bucket)
+        )
+        return [
+            BalanceBucketRow(bucket_start=row[0], delta_minor=int(row[1] or 0))
+            for row in (await session.execute(stmt)).all()
+        ]
+
+    async def trial_balance_by_currency(
+        self,
+        session: AsyncSession,
+        *,
+        currency: str,
+        rows = tuple(
+            TrialBalanceRow(
+                currency=currency,
+                livemode=bool(row[0]),
+                debit_minor=int(row[1] or 0),
+                credit_minor=int(row[2] or 0),
+            )
+            for row in (await session.execute(stmt)).all()
+        )
+        return TrialBalanceTotals(
+            currency=currency,
+            debit_minor=sum(row.debit_minor for row in rows),
+            credit_minor=sum(row.credit_minor for row in rows),
+            rows=rows,
+        )
+
+    async def sample_unbalanced_transactions(
+        self,
+        session: AsyncSession,
+        *,
+        currency: str,
+        as_of: dt.datetime | None = None,
         """How many legs an account carries. Used by the ops CLI before a freeze."""
         stmt = (
             select(func.count())
