@@ -88,3 +88,41 @@ async def cmd_backlog(
 
 
 async def cmd_outbox(sessions: SingleConnectionSessionFactory, limit: int = 20) -> int:
+    outbox = EventOutboxRepository()
+    async with sessions.begin() as session:
+        pending = await outbox.list_unpublished(session, limit=limit, max_attempts=99)
+
+    print_table(
+        ("id", "event_type", "attempts", "created_at", "last_error"),
+        [
+            (row.id, row.event_type, row.publish_attempts, row.created_at, row.last_error)
+            for row in pending
+        ],
+    )
+    return len(pending)
+
+
+async def cmd_locks(sessions: SingleConnectionSessionFactory) -> int:
+    async with sessions.begin() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT l.classid, l.objid, l.granted, a.state,
+                       a.query_start, left(a.query, 80) AS query
+                  FROM pg_locks l
+                  JOIN pg_stat_activity a ON a.pid = l.pid
+                 WHERE l.locktype = 'advisory'
+                 ORDER BY a.query_start
+                """
+            )
+        )
+        rows = list(result)
+
+    print_table(
+        ("classid", "objid", "granted", "state", "query_start", "query"),
+        [tuple(row) for row in rows],
+    )
+    return len(rows)
+
+
+async def cmd_stale_open_batches(
