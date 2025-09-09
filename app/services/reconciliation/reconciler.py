@@ -9,3 +9,15 @@ Session usage in one pass, deliberately:
 
 * ``guard``  — holds ``pg_advisory_xact_lock(PAY, hash(batch_id))`` for the pass
 * ``read``   — lists the eligible items once
+* per item   — one short transaction each, so a failure rolls back one item
+
+That is three concurrent sessions from one shared repository instance, which is why
+``BaseRepository`` is stateless and why ``DATABASE_POOL_SIZE`` is 20.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+
+from sqlalchemy.ext.asyncio import AsyncSession

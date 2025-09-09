@@ -43,6 +43,20 @@ class RecordingLocks(AdvisoryLockManager):
         self.item_locks: list[str] = []
         self.row_locks: list[str] = []
 
+    async def try_acquire_batch_lock(self, session: Any, batch_id: str) -> bool:
+        if self.grant:
+            self.batch_locks.append(batch_id)
+        return self.grant
+
+    async def post_settlement(self, session: Any, item: Any, *, caller: str) -> SettlementResult:
+        self.calls.append((item.id, caller))
+        if item.id in self.fail_with:
+            raise self.fail_with[item.id]
+        self._seq += 1
+        return SettlementResult(transaction_id=f"txn_{self._seq:04d}", created=True)
+
+
+class Settings:
     reconcile_max_items_per_run = 500
     poster = ScriptedPoster(
         fail_with={"ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="rate_limited")}
