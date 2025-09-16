@@ -59,6 +59,13 @@ def print_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
 
 
 async def cmd_backlog(
+    sessions: SingleConnectionSessionFactory, *, currency: str | None = None
+) -> int:
+    """Show the reconciliation backlog broken down by batch and status.
+
+    The number that went from single digits to 4,113 on the night of PAY-2041. Reads the
+    same aggregate the ``/internal/v1/reconciliation/backlog`` route does, without
+    needing the route.
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
@@ -88,3 +95,54 @@ async def cmd_backlog(
 
 
 async def cmd_outbox(sessions: SingleConnectionSessionFactory, limit: int = 20) -> int:
+    outbox = EventOutboxRepository()
+    async with sessions.begin() as session:
+        pending = await outbox.list_unpublished(session, limit=limit, max_attempts=99)
+
+    print_table(
+        ("id", "event_type", "attempts", "created_at", "last_error"),
+        [
+            (row.id, row.event_type, row.publish_attempts, row.created_at, row.last_error)
+            for row in pending
+        ],
+    )
+    return len(pending)
+
+
+async def cmd_locks(sessions: SingleConnectionSessionFactory) -> int:
+    async with sessions.begin() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT l.classid, l.objid, l.granted, a.state,
+                       a.query_start, left(a.query, 80) AS query
+                  FROM pg_locks l
+                  JOIN pg_stat_activity a ON a.pid = l.pid
+                 WHERE l.locktype = 'advisory'
+                 ORDER BY a.query_start
+                """
+            )
+        )
+        rows = list(result)
+
+    print_table(
+        ("classid", "objid", "granted", "state", "query_start", "query"),
+        [tuple(row) for row in rows],
+    )
+    return len(rows)
+
+
+async def cmd_stale_open_batches(
+    batches = SettlementBatchRepository()
+    async with sessions.begin() as session:
+        open_batches = await batches.list_by_status(session, ("open",))
+        stale = [b for b in open_batches if b.processing_date <= cutoff]
+
+    print_table(
+        ("id", "acquirer", "currency", "processing_date", "item_count", "gross_minor"),
+        [
+            (b.id, b.acquirer, b.currency, b.processing_date, b.item_count, b.gross_minor)
+            for b in stale
+        ],
+    )
+    return len(stale)
