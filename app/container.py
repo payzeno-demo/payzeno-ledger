@@ -191,6 +191,7 @@ class Container:
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
+            processor=self.processor,
             flags=self.flags,
             metrics=metrics,
             clock=self.clock,
@@ -211,7 +212,15 @@ class Container:
             sessions=self.sessions,
             settlements=self.settlement_service,
             items=repos.items,
+            strategies=self.match_strategies,
+            poster=self.settlement_poster,
             publisher=self.publisher,
+            settings=settings,
+        )
+        # `locks` arrived here in PR #171 (PAY-2043) and is the reason that hotfix could
+        # not be "one file, one function": the retry path had no lock manager at all, so
+        # the constructor changed and this file changed with it.
+        self.retry_scheduler = RetryScheduler(
             sessions=self.sessions,
             items=repos.items,
             flags=self.flags,
@@ -242,6 +251,7 @@ class Container:
         }
         self.payout_service = PayoutService(
             calculator=self.payout_calculator,
+            initiators=self.payout_initiators,
             banks=repos.banks,
             settings=settings,
             fundings=repos.fundings,
@@ -264,6 +274,7 @@ class Container:
         # -- L6 consumers ------------------------------------------------------------
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
+            sessions=self.sessions,
             sqs_client_factory=sqs_factory,
             banks=repos.banks,
             clock=self.clock,
