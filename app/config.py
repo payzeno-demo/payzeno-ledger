@@ -62,10 +62,13 @@ class Settings(BaseSettings):
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
+    payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"
 
     # -- observability -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    otel_exporter_otlp_endpoint: str | None = None
+
     @classmethod
     @property
     def alembic_database_url(self) -> str:
