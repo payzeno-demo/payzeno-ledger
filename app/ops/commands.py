@@ -59,6 +59,13 @@ def print_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
 
 
 async def cmd_backlog(
+    sessions: SingleConnectionSessionFactory, *, currency: str | None = None
+) -> int:
+    """Show the reconciliation backlog broken down by batch and status.
+
+    The number that went from single digits to 4,113 on the night of PAY-2041. Reads the
+    same aggregate the ``/internal/v1/reconciliation/backlog`` route does, without
+    needing the route.
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
@@ -126,3 +133,16 @@ async def cmd_locks(sessions: SingleConnectionSessionFactory) -> int:
 
 
 async def cmd_stale_open_batches(
+    batches = SettlementBatchRepository()
+    async with sessions.begin() as session:
+        open_batches = await batches.list_by_status(session, ("open",))
+        stale = [b for b in open_batches if b.processing_date <= cutoff]
+
+    print_table(
+        ("id", "acquirer", "currency", "processing_date", "item_count", "gross_minor"),
+        [
+            (b.id, b.acquirer, b.currency, b.processing_date, b.item_count, b.gross_minor)
+            for b in stale
+        ],
+    )
+    return len(stale)

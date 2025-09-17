@@ -35,5 +35,11 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     """One balanced posting. Immutable once written — corrections are new transactions."""
 
     __tablename__ = "ledger_transaction"
+    reference_id: Mapped[str] = mapped_column(Text, nullable=False)
+
+    reverses_transaction_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
+    )
+    transaction_id: Mapped[str] = mapped_column(Text, primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     amount_minor: Mapped[int | None] = mapped_column(nullable=True)
