@@ -22,3 +22,14 @@ consumers — goes through it. It enforces, on every post:
    aggregate is wrong. → `NegativeAmountError`
 3. **One currency.** No transaction spans currencies, and no entry lands on an account of
    a different currency. FX never shipped, so there is nothing legitimate to be tolerant
+   of. → `CurrencyMismatchError`
+4. **One livemode.** Test-mode and live-mode rows never meet. This is the worst thing the
+   service can do quietly: a sandbox charge on a live merchant's balance is a payout of
+   real money. → `LivemodeMismatchError`
+5. **Account is postable.** `frozen` and `closed` accounts reject. → `AccountFrozenError`,
+   409 and not 500, because it is a policy decision and not a fault.
+
+`ledger_entry` is append-only, enforced in the database by `trg_ledger_entry_immutable`
+(migration `0004`) and not by convention. Corrections are new transactions —
+`ReversalPostingRule`, `AdjustmentPostingRule` — never edits.
+
