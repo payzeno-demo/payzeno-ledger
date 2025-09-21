@@ -25,8 +25,14 @@ class LedgerEntry(Base, CreatedAtMixin, LivemodeMixin):
     """One debit or credit leg of a :class:`~app.models.ledger_transaction.LedgerTransaction`."""
 
     __tablename__ = "ledger_entry"
+    entity_name: ClassVar[str] = "ledger_entry"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
     transaction_id: Mapped[str] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("account.id", ondelete="RESTRICT"), nullable=False
     )
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
