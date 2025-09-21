@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     sns_ledger_topic_arn: str = (
         "arn:aws:sns:eu-west-1:000000000000:payzeno-ledger-events"
     )
+    sqs_merchants_queue_url: str = ""
     #: Local only — localstack. Must be unset in staging and production so boto3
     #: resolves the real endpoint.
     aws_endpoint_url: str | None = None
@@ -65,10 +66,12 @@ class Settings(BaseSettings):
     payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"
 
+    settlement_import_enabled: bool = True
     # -- observability -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     otel_exporter_otlp_endpoint: str | None = None
 
+    @classmethod
     @classmethod
     @property
     def alembic_database_url(self) -> str:
