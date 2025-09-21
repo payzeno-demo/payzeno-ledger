@@ -210,6 +210,7 @@ class Container:
         )
         self.settlement_import_service = SettlementImportService(
             sessions=self.sessions,
+            processor=self.processor,
             settlements=self.settlement_service,
             items=repos.items,
             strategies=self.match_strategies,
@@ -224,6 +225,7 @@ class Container:
             sessions=self.sessions,
             items=repos.items,
             flags=self.flags,
+            batches=repos.batches,
             clock=self.clock,
         )
 
@@ -275,6 +277,7 @@ class Container:
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
+            sessions=self.sessions,
             sqs_client_factory=sqs_factory,
             banks=repos.banks,
             clock=self.clock,
@@ -289,7 +292,11 @@ class Container:
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
+            batches=repos.batches,
             clock=self.clock,
+            settings=settings,
+        )
+        self.funding_match_job = FundingMatchJob(
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
@@ -298,6 +305,10 @@ class Container:
         )
         self.reserve_release_job = ReserveReleaseJob(
             repositories=repos,
+            settings=settings,
+        )
+        self.ledger_audit_job = LedgerAuditJob(audit=self.audit_service, settings=settings)
+        self.outbox_drain_job = OutboxDrainJob(
             sessions=self.sessions,
             publisher=self.sns_publisher,
             settings=settings,
