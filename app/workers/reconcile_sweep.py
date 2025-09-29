@@ -23,3 +23,9 @@ from app.workers.base import JobResult, PeriodicJob
 logger = get_logger(__name__)
 
 
+class ReconciliationSweepJob(PeriodicJob):
+    """Reconciles every batch that is closed but not yet fully settled."""
+
+    name: ClassVar[str] = "reconciliation_sweep"
+
+    def __init__(
