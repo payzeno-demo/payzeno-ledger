@@ -58,6 +58,7 @@ class RecordingLocks(AdvisoryLockManager):
 
 class Settings:
     reconcile_max_items_per_run = 500
+    publisher = CollectingPublisher()
     poster = ScriptedPoster(
         fail_with={"ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="rate_limited")}
     )
@@ -72,3 +73,6 @@ async def test_an_empty_batch_still_produces_a_finished_run(
     sessions_factory, batches, items, runs
 ) -> None:
     batches.seed(make_batch(batch_id="sb_empty", status="closed"))
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
