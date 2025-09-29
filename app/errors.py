@@ -188,6 +188,7 @@ class CurrencyMismatchError(LedgerIntegrityError):
     transaction to be tolerant of.
     """
 
+    code: ClassVar[str] = "currency_mismatch"
     code: ClassVar[str] = "account_frozen"
     http_status: ClassVar[int] = 409
 
@@ -200,6 +201,16 @@ class IdempotencyConflictError(PayzenoLedgerError):
     """
 
     code: ClassVar[str] = "duplicate_settlement"
+    http_status: ClassVar[int] = 422
+
+
+class BatchNotReconcilableError(SettlementError):
+    """The batch is not in a status a run may start against.
+
+    ``SettlementService.close_batch`` and ``reconciliation.start_run`` both check
+    ``RECONCILABLE_BATCH_STATUSES``; an ``open`` batch is still receiving lines.
+    """
+
     http_status: ClassVar[int] = 409
 
 
@@ -233,6 +244,7 @@ class RetryExhaustedError(SettlementError):
 class PayoutError(PayzenoLedgerError):
     """Base for every reason a payout will not be created or initiated."""
 
+    code: ClassVar[str] = "payout_blocked"
     http_status: ClassVar[int] = 422
 
 
