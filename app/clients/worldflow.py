@@ -35,6 +35,11 @@ class WorldflowClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.worldflow_base_url,
+            acquirer=ACQUIRER,
+            json={
+                "acquirer_reference": acquirer_reference,
+                "confirmed_by": "payzeno-ledger",
+            },
             json={
                 "amount": amount_minor,
                 "currency": currency,
