@@ -30,12 +30,37 @@ class NordpayClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.nordpay_base_url,
+            acquirer_account=settings.nordpay_acquirer_account,
             json={
                 "acquirer_reference": acquirer_reference,
                 "confirmed_by": "payzeno-ledger",
             },
+            headers={"Idempotency-Key": f"confirm:{batch_id}:{acquirer_reference}"},
+        )
+
+    async def capture_deferred(
+        self,
+        charge_id: str,
+        amount_minor: int,
+        currency: str,
+        reference: str,
+        *,
+        idempotency_key: str,
+    ) -> CaptureResponse:
+        response = await self._http.post(
+            f"/v2/authorizations/{reference}/captures",
             headers={"Idempotency-Key": idempotency_key},
         )
         body = response.json()
         return CaptureResponse(
+            response = await self._http.get(
+                f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
+            )
+        except UpstreamError as exc:
+            if exc.details.get("status") == 404:
+                return CaptureStatus(state="not_captured", reference=None)
+            raise
+        body = response.json()
+        state = body.get("state", "unknown")
+        if state not in ("captured", "not_captured"):
     return datetime.now(tz=timezone.utc)
