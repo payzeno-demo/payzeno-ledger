@@ -59,6 +59,15 @@ class RecordingLocks(AdvisoryLockManager):
 class Settings:
     reconcile_max_items_per_run = 500
     publisher = CollectingPublisher()
+    run = await service.reconcile_batch("sb_big", max_items=5)
+
+    assert run.items_total == 5
+    assert len(poster.calls) == 5
+
+
+async def test_run_counters_are_locals_not_orm_mutations(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     poster = ScriptedPoster(
         fail_with={"ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="rate_limited")}
     )
@@ -73,6 +82,28 @@ async def test_an_empty_batch_still_produces_a_finished_run(
     sessions_factory, batches, items, runs
 ) -> None:
     batches.seed(make_batch(batch_id="sb_empty", status="closed"))
+    run = await service.reconcile_batch("sb_empty")
+
+    assert run.items_total == 0
+    assert run.status == "succeeded"
+    assert poster.calls == []
+
+
+async def test_only_retryable_statuses_are_picked_up(
+    sessions_factory, batches, items, runs
+) -> None:
+    batches.seed(make_batch(batch_id="sb_mixed", status="closed"))
+    for status in ("pending", "retryable", "settled", "orphaned", "variance_exceeded"):
+        items.seed(
+            make_item(
+                item_id=f"ri_{status}",
+                batch_id="sb_mixed",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status=status,
+                next_attempt_at=NOW,
+            )
+        )
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
