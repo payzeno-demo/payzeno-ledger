@@ -35,9 +35,48 @@ class WorldflowClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.worldflow_base_url,
+            acquirer=ACQUIRER,
+            json={
+                "acquirer_reference": acquirer_reference,
+                "confirmed_by": "payzeno-ledger",
+            },
             json={
                 "amount": amount_minor,
                 "currency": currency,
                 "merchant_reference": charge_id,
             },
+            reference=str(body.get("reference") or idempotency_key),
+            state = "unknown"
+        return CaptureStatus(state=state, reference=body.get("reference"))
+
+    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+        """Download the raw settlement file for a processing date.
+
+        Worldflow files are CSV; ``WorldflowCsvParser`` owns the format.
+        """
+        response = await self._http.get(
+            "/v2/settlement-files", params={"date": processing_date.isoformat()}
+        )
+        return response.content
+
+    async def health_check(self) -> bool:
+        """Breaker probe. Never raises — a probe that raises re-opens the circuit."""
+        try:
+            await self._http.get("/v2/health")
+        except UpstreamError:
+            return False
+        except ProcessorIndeterminateError:
+            return False
+        return True
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+
+def _parse_timestamp(raw: object) -> datetime:
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("acquirer_bad_timestamp", acquirer=ACQUIRER, value=raw)
     return datetime.now(tz=timezone.utc)

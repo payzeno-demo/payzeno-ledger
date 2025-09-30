@@ -19,3 +19,8 @@ INDETERMINATE_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {"processor_timeout", "processor_connection_reset"}
 )
 
+#: Line types that carry a settlement_charge and therefore a merchant balance movement.
+CHARGE_BEARING_LINE_TYPES: Final[frozenset[str]] = frozenset(
+    {"sale", "refund", "chargeback", "chargeback_reversal"}
+)
+
