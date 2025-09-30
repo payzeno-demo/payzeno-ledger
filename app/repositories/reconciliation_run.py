@@ -47,6 +47,30 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         advisory lock. Deliberately so: the run row is what an operator watches while the
         pass is blocked waiting for that lock, and a run created *inside* the guard
         transaction would only become visible once the pass had already started.
+        """
+        run = ReconciliationRun(
+            id=new_id("rr"),
+            batch_id=batch_id,
+            trigger=trigger,
+            status="running",
+            items_total=0,
+            items_settled=0,
+            items_failed=0,
+            started_at=at or dt.datetime.now(dt.UTC),
+        )
+        session.add(run)
+        await session.flush()
+        return run
+
+    async def finish(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        *,
+        items_total: int,
+        items_settled: int,
+        items_failed: int,
+        status: str,
         stmt = stmt.limit(limit)
         return list((await session.execute(stmt)).scalars().all())
 

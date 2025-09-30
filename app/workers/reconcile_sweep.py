@@ -16,3 +16,16 @@ from app.errors import PayzenoLedgerError
 from app.logging import get_logger
 from app.ports import SessionFactory
 from app.repositories.settlement_batch import SettlementBatchRepository
+from app.services.reconciliation.constants import RECONCILABLE_BATCH_STATUSES
+from app.services.reconciliation.reconciler import ReconciliationService
+from app.workers.base import JobResult, PeriodicJob
+
+logger = get_logger(__name__)
+
+
+class ReconciliationSweepJob(PeriodicJob):
+    """Reconciles every batch that is closed but not yet fully settled."""
+
+    name: ClassVar[str] = "reconciliation_sweep"
+
+    def __init__(

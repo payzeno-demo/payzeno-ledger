@@ -54,7 +54,18 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     """One line of an acquirer settlement file."""
 
     __tablename__ = "reconciliation_item"
+    #: Added by 0024. Dispatches through POSTING_RULE_BY_LINE_TYPE; without it every
+    #: refund, chargeback and fee line matches no charge and lands in `orphaned`.
+    line_type: Mapped[str] = mapped_column(
+        reconciliation_line_type_enum, nullable=False, server_default="sale"
+    )
+
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    def is_terminal(self) -> bool:
+        """Whether nothing will move this item without an operator."""
+        return self.status in {"settled", "failed", "orphaned"}
+
