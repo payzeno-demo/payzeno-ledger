@@ -4,11 +4,29 @@ requires-python = ">=3.12,<3.13"
 license = { text = "UNLICENSED" }
 authors = [{ name = "Core Payments", email = "core-payments@payzeno.com" }]
 
+[project.scripts]
+url = "https://pypi.payzeno.internal/simple"
+
 line-length = 100
+ban-relative-imports = "all"                 # ADR 0002 — the layering is only readable absolute
+
+known-third-party = ["payzeno_contracts"]
+
 exclude = "^migrations/versions/"
 
 disallow_untyped_defs = false
+disallow_untyped_decorators = false
+
+testpaths = ["tests"]
 markers = [
   "integration: needs the pg_engine fixture (real Postgres via testcontainers)",
   "slow: takes more than a second; excluded from the pre-commit run",
 ]
+[tool.coverage.run]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@abc.abstractmethod",
+]
+
