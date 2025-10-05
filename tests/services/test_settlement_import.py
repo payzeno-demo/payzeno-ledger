@@ -89,6 +89,60 @@ class CollectingItemRepository:
 
 
 class NullChargeRepository:
+    settlements = RecordingSettlementService()
+    processor = StubProcessor()
+    service, _, items = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert len(items.added) == 3
+    assert {row.acquirer_reference for row in items.added} == {
+        "WF-2001",
+        "WF-2002",
+        "WF-2003",
+    }
+
+
+async def test_import_file_carries_line_type_through_from_the_file(sessions_factory) -> None:
+    first = await service.import_file("worldflow", PROCESSING_DATE)
+    second = await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert first.id == second.id
+    assert len(settlements.batches) == 1
+
+
+async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    """
+    service = SettlementService(
+        batches=_InMemoryBatches(),
+        items=CollectingItemRepository(),
+        publisher=CollectingPublisher(),
+        clock=FrozenClock(NOW),
+    )
+
+    batch_id, count = await service.import_legacy_records(
+        object(),
+        acquirer="nordpay",
+        processing_date=PROCESSING_DATE,
+        file_reference="LEGACY-20260415",
+        records=[
+            {
+                "acquirer_reference": "NP-9001",
+                "line_type": "sale",
+                "gross_minor": 4_000,
+                "fee_minor": 116,
+                "net_minor": 3_884,
+                "currency": "EUR",
+            }
+        ],
+        strategies=[ExactReferenceMatch(NullChargeRepository())],
+    )
+
+    assert batch_id
+    assert count == 1
+
+
+class _InMemoryBatches:
     def __init__(self) -> None:
         self.rows: dict[str, Any] = {}
         self.by_file: dict[str, str] = {}
