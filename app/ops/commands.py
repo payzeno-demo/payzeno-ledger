@@ -66,6 +66,41 @@ async def cmd_backlog(
     The number that went from single digits to 4,113 on the night of PAY-2041. Reads the
     same aggregate the ``/internal/v1/reconciliation/backlog`` route does, without
     needing the route.
+    sessions: SingleConnectionSessionFactory, *, since_hours: int = 24
+) -> int:
+    """Find settle transactions sharing an idempotency key.
+
+    The query from ``docs/runbooks/reconciliation.md``, and the one that produced the
+    1,847 figure in the postmortem. It exists as a command because at 01:20 nobody wants
+    to be reconstructing a ``GROUP BY … HAVING count(*) > 1`` from memory against a
+    replica.
+
+    Structurally impossible after migration ``0020`` made
+    ``ix_ledger_transaction_idempotency_key`` unique. Kept for the historical window and
+    because "impossible" is a claim worth being able to check.
+    transactions = LedgerTransactionRepository()
+    async with sessions.begin() as session:
+        rows = await transactions.list_duplicate_idempotency_keys(session, since=since)
+
+    print_table(
+        ("idempotency_key", "count", "transaction_ids", "merchant_id", "amount_minor"),
+        [
+            (
+                row.idempotency_key,
+                row.count,
+                ",".join(row.transaction_ids),
+                row.merchant_id,
+                row.amount_minor,
+            )
+            for row in rows
+        ],
+    )
+    return len(rows)
+
+
+async def cmd_show_batch(
+    sessions: SingleConnectionSessionFactory, batch_id: str
+) -> None:
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
