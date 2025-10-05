@@ -115,6 +115,8 @@ class WorldflowCsvParser(SettlementFileParser):
             lines.append(
                 ParsedSettlementLine(
                     line_type=self._line_type(record[40:42]),
+                    fee_minor=to_minor(record[54:66].strip() or "0", currency),
+                    interchange_minor=to_minor(record[66:78].strip() or "0", currency),
                 )
             )
 
