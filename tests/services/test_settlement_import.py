@@ -83,6 +83,9 @@ class RecordingSettlementService(SettlementService):
 
 
 class CollectingItemRepository:
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
     async def add(self, session: Any, obj: Any) -> Any:
         self.added.append(obj)
         return obj
@@ -104,6 +107,12 @@ class NullChargeRepository:
 
 
 async def test_import_file_carries_line_type_through_from_the_file(sessions_factory) -> None:
+    """`line_type` picks the `PostingRule`. A wrong code books the wrong legs."""
+    processor = StubProcessor()
+    service, _, items = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE)
+
     first = await service.import_file("worldflow", PROCESSING_DATE)
     second = await service.import_file("worldflow", PROCESSING_DATE)
 

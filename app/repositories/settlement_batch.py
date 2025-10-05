@@ -95,6 +95,12 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         session: AsyncSession,
         *,
         processing_date: dt.date,
+        acquirer: str | None = None,
+    ) -> list[SettlementBatch]:
+        """Every batch for one calendar processing day.
+
+        One acquirer files one batch per currency per day, so this is usually five rows.
+        The ops CLI prints it as a table when someone asks "did yesterday land".
         stmt = stmt.order_by(SettlementBatch.currency)
         return list((await session.execute(stmt)).scalars().all())
 
