@@ -114,6 +114,7 @@ class WorldflowCsvParser(SettlementFileParser):
             currency = record[102:105].strip().upper() or "EUR"
             lines.append(
                 ParsedSettlementLine(
+                    line_type=self._line_type(record[40:42]),
                 )
             )
 
