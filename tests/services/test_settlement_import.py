@@ -71,6 +71,12 @@ class RecordingSettlementService(SettlementService):
     guard when the state machine is violated.
     """
 
+    def __init__(self) -> None:
+        self.batches: dict[str, Any] = {}
+        self.by_file: dict[str, str] = {}
+        self.closed: list[str] = []
+        self._seq = 0
+
     async def close_batch(self, session: Any, batch_id: str) -> Any:
         batch = self.batches[batch_id]
         if batch.status != "open":
@@ -93,6 +99,7 @@ class CollectingItemRepository:
 
 class NullChargeRepository:
     settlements = RecordingSettlementService()
+    items = CollectingItemRepository()
     processor = StubProcessor()
     service, _, items = _importer(sessions_factory, processor)
 
