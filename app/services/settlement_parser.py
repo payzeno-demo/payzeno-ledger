@@ -104,7 +104,16 @@ class WorldflowCsvParser(SettlementFileParser):
             lines.append(
                 ParsedSettlementLine(
                     acquirer_reference=row["acquirer_reference"].strip(),
+                    gross_minor=_int(row.get("gross_minor")),
+                    fee_minor=_int(row.get("fee_minor")),
+                    interchange_minor=_int(row.get("interchange_minor")),
                     net_minor=_int(row.get("net_minor")),
+                    expected=self.RECORD_LENGTH,
+                )
+
+            currency = record[102:105].strip().upper() or "EUR"
+            lines.append(
+                ParsedSettlementLine(
                 )
             )
 
