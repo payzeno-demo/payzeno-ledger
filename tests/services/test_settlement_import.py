@@ -77,6 +77,31 @@ class RecordingSettlementService(SettlementService):
         self.closed: list[str] = []
         self._seq = 0
 
+    async def open_batch(
+        self,
+        session: Any,
+        *,
+        acquirer: str,
+        currency: str,
+        processing_date: date,
+        file_reference: str,
+        livemode: bool = True,
+    ) -> Any:
+        if file_reference in self.by_file:
+            return self.batches[self.by_file[file_reference]]
+        self._seq += 1
+        batch = make_batch(
+            batch_id=f"sb_imp_{self._seq}",
+            acquirer=acquirer,
+            currency=currency,
+            status="open",
+            processing_date=processing_date,
+            file_reference=file_reference,
+        )
+        self.batches[batch.id] = batch
+        self.by_file[file_reference] = batch.id
+        return batch
+
     async def close_batch(self, session: Any, batch_id: str) -> Any:
         batch = self.batches[batch_id]
         if batch.status != "open":
@@ -128,6 +153,24 @@ async def test_import_file_carries_line_type_through_from_the_file(sessions_fact
 
 
 async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    lines = WorldflowCsvParser().parse(reordered)
+
+    assert len(lines) == 1
+    assert lines[0].acquirer_reference == "WF-3001"
+    assert lines[0].gross_minor == 10_000
+    assert lines[0].net_minor == 9_710
+
+
+# --------------------------------------------------------------------------------------
+# the legacy push path — POST /internal/v1/settlement-imports
+# --------------------------------------------------------------------------------------
+
+
+async def test_import_legacy_records_opens_and_returns_a_count() -> None:
+    """The route payzeno-billing-legacy's export job pushes to.
+
+    It predates `SettlementImportService` and duplicates its matching. Nobody has time to
+    converge them, so it gets its own test instead.
     """
     service = SettlementService(
         batches=_InMemoryBatches(),
