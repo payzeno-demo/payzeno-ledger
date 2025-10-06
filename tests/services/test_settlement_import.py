@@ -123,8 +123,32 @@ class CollectingItemRepository:
 
 
 class NullChargeRepository:
+    async def find_by_processor_reference(
+        self, session: Any, *, acquirer: str, processor_reference: str
+    ) -> Any | None:
+        return None
+
+
+def _importer(sessions_factory, processor: StubProcessor):
     settlements = RecordingSettlementService()
     items = CollectingItemRepository()
+    service = SettlementImportService(
+        sessions=sessions_factory,
+        processor=processor,
+        settlements=settlements,
+        items=items,
+        strategies=[ExactReferenceMatch(NullChargeRepository())],
+        clock=FrozenClock(NOW),
+    )
+    return service, settlements, items
+
+
+# --------------------------------------------------------------------------------------
+# import_file
+# --------------------------------------------------------------------------------------
+
+
+async def test_import_file_fetches_from_the_acquirer(sessions_factory) -> None:
     processor = StubProcessor()
     service, _, items = _importer(sessions_factory, processor)
 
