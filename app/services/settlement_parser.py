@@ -107,6 +107,7 @@ class WorldflowCsvParser(SettlementFileParser):
                     gross_minor=_int(row.get("gross_minor")),
                     fee_minor=_int(row.get("fee_minor")),
                     interchange_minor=_int(row.get("interchange_minor")),
+                    scheme_fee_minor=_int(row.get("scheme_fee_minor")),
                     net_minor=_int(row.get("net_minor")),
                     expected=self.RECORD_LENGTH,
                 )
@@ -117,6 +118,7 @@ class WorldflowCsvParser(SettlementFileParser):
                     line_type=self._line_type(record[40:42]),
                     fee_minor=to_minor(record[54:66].strip() or "0", currency),
                     interchange_minor=to_minor(record[66:78].strip() or "0", currency),
+                    scheme_fee_minor=to_minor(record[78:90].strip() or "0", currency),
                 )
             )
 
