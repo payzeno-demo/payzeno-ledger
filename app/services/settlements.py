@@ -82,6 +82,7 @@ class SettlementService:
         batch = SettlementBatch(
             id=new_id("sb"),
             acquirer=acquirer,
+            status="open",
             livemode=livemode,
             correlation_id=batch.id,
             batch_id=batch.id,
@@ -125,5 +126,6 @@ class SettlementService:
             batch_id = batch.id
 
         async with self._sessions.begin() as session:
+            batch_id=batch_id,
             acquirer=acquirer,
         ]

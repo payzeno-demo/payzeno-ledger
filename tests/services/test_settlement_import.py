@@ -71,6 +71,37 @@ class RecordingSettlementService(SettlementService):
     guard when the state machine is violated.
     """
 
+    def __init__(self) -> None:
+        self.batches: dict[str, Any] = {}
+        self.by_file: dict[str, str] = {}
+        self.closed: list[str] = []
+        self._seq = 0
+
+    async def open_batch(
+        self,
+        session: Any,
+        *,
+        acquirer: str,
+        currency: str,
+        processing_date: date,
+        file_reference: str,
+        livemode: bool = True,
+    ) -> Any:
+        if file_reference in self.by_file:
+            return self.batches[self.by_file[file_reference]]
+        self._seq += 1
+        batch = make_batch(
+            batch_id=f"sb_imp_{self._seq}",
+            acquirer=acquirer,
+            currency=currency,
+            status="open",
+            processing_date=processing_date,
+            file_reference=file_reference,
+        )
+        self.batches[batch.id] = batch
+        self.by_file[file_reference] = batch.id
+        return batch
+
     async def close_batch(self, session: Any, batch_id: str) -> Any:
         batch = self.batches[batch_id]
         if batch.status != "open":
@@ -83,12 +114,118 @@ class RecordingSettlementService(SettlementService):
 
 
 class CollectingItemRepository:
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
     async def add(self, session: Any, obj: Any) -> Any:
         self.added.append(obj)
         return obj
 
 
 class NullChargeRepository:
+    async def find_by_processor_reference(
+        self, session: Any, *, acquirer: str, processor_reference: str
+    ) -> Any | None:
+        return None
+
+
+def _importer(sessions_factory, processor: StubProcessor):
+    settlements = RecordingSettlementService()
+    items = CollectingItemRepository()
+    service = SettlementImportService(
+        sessions=sessions_factory,
+        processor=processor,
+        settlements=settlements,
+        items=items,
+        strategies=[ExactReferenceMatch(NullChargeRepository())],
+        clock=FrozenClock(NOW),
+    )
+    return service, settlements, items
+
+
+# --------------------------------------------------------------------------------------
+# import_file
+# --------------------------------------------------------------------------------------
+
+
+async def test_import_file_fetches_from_the_acquirer(sessions_factory) -> None:
+    processor = StubProcessor()
+    service, _, items = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert len(items.added) == 3
+    assert {row.acquirer_reference for row in items.added} == {
+        "WF-2001",
+        "WF-2002",
+        "WF-2003",
+    }
+
+
+async def test_import_file_carries_line_type_through_from_the_file(sessions_factory) -> None:
+    """`line_type` picks the `PostingRule`. A wrong code books the wrong legs."""
+    processor = StubProcessor()
+    service, _, items = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE)
+
+    first = await service.import_file("worldflow", PROCESSING_DATE)
+    second = await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert first.id == second.id
+    assert len(settlements.batches) == 1
+
+
+async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    lines = WorldflowCsvParser().parse(reordered)
+
+    assert len(lines) == 1
+    assert lines[0].acquirer_reference == "WF-3001"
+    assert lines[0].gross_minor == 10_000
+    assert lines[0].net_minor == 9_710
+
+
+# --------------------------------------------------------------------------------------
+# the legacy push path — POST /internal/v1/settlement-imports
+# --------------------------------------------------------------------------------------
+
+
+async def test_import_legacy_records_opens_and_returns_a_count() -> None:
+    """The route payzeno-billing-legacy's export job pushes to.
+
+    It predates `SettlementImportService` and duplicates its matching. Nobody has time to
+    converge them, so it gets its own test instead.
+    """
+    service = SettlementService(
+        batches=_InMemoryBatches(),
+        items=CollectingItemRepository(),
+        publisher=CollectingPublisher(),
+        clock=FrozenClock(NOW),
+    )
+
+    batch_id, count = await service.import_legacy_records(
+        object(),
+        acquirer="nordpay",
+        processing_date=PROCESSING_DATE,
+        file_reference="LEGACY-20260415",
+        records=[
+            {
+                "acquirer_reference": "NP-9001",
+                "line_type": "sale",
+                "gross_minor": 4_000,
+                "fee_minor": 116,
+                "net_minor": 3_884,
+                "currency": "EUR",
+            }
+        ],
+        strategies=[ExactReferenceMatch(NullChargeRepository())],
+    )
+
+    assert batch_id
+    assert count == 1
+
+
+class _InMemoryBatches:
     def __init__(self) -> None:
         self.rows: dict[str, Any] = {}
         self.by_file: dict[str, str] = {}
