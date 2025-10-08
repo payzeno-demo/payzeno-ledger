@@ -4,18 +4,37 @@ requires-python = ">=3.12,<3.13"
 license = { text = "UNLICENSED" }
 authors = [{ name = "Core Payments", email = "core-payments@payzeno.com" }]
 
+[project.optional-dependencies]
 [project.scripts]
+# the operator CLI — app/ops/cli.py. The second SessionFactory consumer.
+payzeno-ledger-ops = "app.ops.cli:main"
+
 url = "https://pypi.payzeno.internal/simple"
 
 line-length = 100
+target-version = "py312"
+ignore = [
+  "S101",   # assert — used everywhere in tests
+  "B008",   # FastAPI Depends() in defaults is the framework idiom
+  "RET504", # named return values are deliberate in the posting rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG001", "ARG002", "S105", "S106"]
+"app/ops/**" = ["T201"]                      # the CLI prints tables on purpose
+
 ban-relative-imports = "all"                 # ADR 0002 — the layering is only readable absolute
 
 known-third-party = ["payzeno_contracts"]
 
 exclude = "^migrations/versions/"
 
+[[tool.mypy.overrides]]
 disallow_untyped_defs = false
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
 
 testpaths = ["tests"]
 markers = [
