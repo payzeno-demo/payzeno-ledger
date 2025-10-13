@@ -43,3 +43,14 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+
+class ReconciliationService:
+    """Reconciles a whole settlement batch."""
+
+    def __init__(
+        self,
+        sessions: SessionFactory,
+        locks: AdvisoryLockManager,
+        batches: SettlementBatchRepository,
+        items: ReconciliationItemRepository,
+        runs: ReconciliationRunRepository,
