@@ -83,3 +83,11 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         open forever, because the row is only closed on the way out. This read is what the
         ops CLI's ``runs --stuck`` command prints, and it is how an operator tells a
         genuinely long pass from a corpse.
+        """
+        stmt = (
+            select(ReconciliationRun)
+            .where(ReconciliationRun.status == "running")
+            .where(ReconciliationRun.started_at < older_than)
+            .order_by(ReconciliationRun.started_at)
+        )
+        return list((await session.execute(stmt)).scalars().all())
