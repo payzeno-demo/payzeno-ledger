@@ -31,3 +31,14 @@ from app.errors import TransactionNotFoundError
 from app.models.ledger_transaction import LedgerTransaction
 from app.repositories.base import BaseRepository
 
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyClaim:
+    """The outcome of :meth:`LedgerTransactionRepository.claim_idempotency_key`.
+
+    ``created`` is False when somebody else owns the key. The caller then has the winner's
+    transaction id without a second round trip, which is what lets ``SettlementPoster``
+    emit ``settlement.duplicate_detected`` naming both rows.
+    """
+
+    transaction_id: str
