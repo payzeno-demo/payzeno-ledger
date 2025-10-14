@@ -76,7 +76,55 @@ class UpsertingBanks(BankAccountProjectionRepository):
         self.rejected: list[str] = []
 
     async def upsert_if_newer(self, session: Any, projection: Any) -> bool:
+        resolver=BootstrappingResolver(),
+        livemode=True,
+    )
+
+    assert resolver.bootstrapped == [("mer_c1", "USD", True)]
+
+
+async def test_a_stale_created_replay_does_not_re_bootstrap() -> None:
+    merchants = UpsertingMerchants()
+    resolver = BootstrappingResolver()
+    common = {
+        "merchants": merchants,
+        "resolver": resolver,
+        "clock": FrozenClock(NOW),
+        "livemode": True,
+    }
+
+    await handle_merchant_created(
+        object(), _created_payload(), event_id="evt_new", occurred_at=NOW, **common
+    )
+    await handle_merchant_created(
+        object(), _created_payload(), event_id="evt_old", occurred_at=EARLIER, **common
+    )
+
+    assert len(resolver.bootstrapped) == 1
+    assert merchants.rejected == ["mer_c1"]
+
+
+# --------------------------------------------------------------------------------------
+# merchant.updated — the capture_at_settlement path
+# --------------------------------------------------------------------------------------
+
+
+async def test_updated_is_the_only_way_capture_at_settlement_becomes_true() -> None:
+    merchants = UpsertingMerchants()
+    await handle_merchant_created(
+        object(),
+        _created_payload(capture_at_settlement=False),
+        clock=FrozenClock(NOW),
+        event_id="evt_c1",
+        livemode=True,
+    )
+
+    await handle_merchant_updated(
+        object(),
+        _updated_payload(capture_at_settlement=True),
+        clock=FrozenClock(NOW),
         merchants=merchants,
+        occurred_at=EARLIER,
         event_id="evt_u1",
         livemode=True,
     )
@@ -98,6 +146,8 @@ async def test_an_update_before_the_create_is_dropped_not_invented() -> None:
     await handle_merchant_updated(
         object(),
         _updated_payload(),
+        merchants=merchants,
+        event_id="evt_u_orphan",
         occurred_at=NOW,
         livemode=True,
     )
@@ -115,6 +165,43 @@ async def test_status_change_applies_to_the_projection() -> None:
     await handle_merchant_created(
         object(),
         _created_payload(),
+        merchants=merchants,
+        occurred_at=NOW,
+    )
+
+    assert merchants.status_updates == []
+
+
+# --------------------------------------------------------------------------------------
+# merchant.bank_account_verified
+# --------------------------------------------------------------------------------------
+
+
+def _bank_payload(**overrides: Any) -> dict[str, Any]:
+    payload = {
+        "bank_account_id": "ba_1",
+        "merchant_id": "mer_c1",
+        "currency": "USD",
+        "country": "US",
+        "scheme": "ach",
+        "account_number_token": "tok_bank_1",
+        "routing_last_four": "0021",
+        "iban_last_four": None,
+        "bic": None,
+        "sort_code_last_four": None,
+        "is_default": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_a_verified_account_is_projected_as_verified() -> None:
+    banks = UpsertingBanks()
+
+    await handle_bank_account_verified(
+        object(),
+        _bank_payload(),
+        clock=FrozenClock(NOW),
         event_id="evt_b1",
         occurred_at=NOW,
         event_id="evt_b1",
@@ -133,6 +220,8 @@ async def test_a_non_default_account_does_not_clear_anything() -> None:
         object(),
         _bank_payload(bank_account_id="ba_3", is_default=False),
         occurred_at=NOW,
+        occurred_at=EARLIER,
+        **common,
     )
 
     assert banks.rows["ba_1"].account_number_token == "tok_bank_1"

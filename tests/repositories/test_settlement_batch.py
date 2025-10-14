@@ -20,6 +20,7 @@ from tests.factories import make_batch
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
+@pytest.fixture
 async def test_list_by_status_with_an_empty_tuple_returns_nothing(
     session, repo: SettlementBatchRepository
 ) -> None:
@@ -27,6 +28,22 @@ async def test_list_by_status_with_an_empty_tuple_returns_nothing(
     await session.flush()
 
     assert await repo.list_by_status(session, ()) == []
+
+
+async def test_add_posted_total_accumulates(session, repo: SettlementBatchRepository) -> None:
+    # `posted_total_minor` vs `expected_total_minor` is what PAY-2055's second alarm reads
+    # (posted/expected > 1.001). On the incident night it was inflated by net_minor for each
+    # of the 1,847 duplicates and nothing was watching it.
+    batch = make_batch(batch_id="sb_rb_6", expected_total_minor=100_000)
+    await repo.add(session, batch)
+    await session.flush()
+
+    await repo.add_posted_total(session, "sb_rb_6", amount_minor=40_000)
+    await repo.add_posted_total(session, "sb_rb_6", amount_minor=60_000)
+
+    refreshed = await repo.get_or_raise(session, "sb_rb_6")
+    assert refreshed.posted_total_minor == 100_000
+    assert refreshed.posted_total_minor <= refreshed.expected_total_minor
 
 
 async def test_mark_status_transitions(session, repo: SettlementBatchRepository) -> None:
