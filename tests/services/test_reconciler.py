@@ -59,6 +59,23 @@ class RecordingLocks(AdvisoryLockManager):
 class Settings:
     reconcile_max_items_per_run = 500
     publisher = CollectingPublisher()
+    run = await service.reconcile_batch(batch_of_three, trigger="scheduled")
+
+    assert run.status == "succeeded"
+    assert run.items_total == 3
+    assert run.items_settled == 3
+    assert run.items_failed == 0
+    assert len(poster.calls) == 3
+
+
+async def test_it_acquires_the_batch_advisory_lock(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    poster = ScriptedPoster(
+        fail_with={"ri_sweep_1": RetryableSettlementError(item_id="ri_sweep_1", code="rate_limited")}
+    )
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch("sb_big", max_items=5)
 
     assert run.items_total == 5
@@ -68,6 +85,9 @@ class Settings:
 async def test_run_counters_are_locals_not_orm_mutations(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     poster = ScriptedPoster(
         fail_with={"ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="rate_limited")}
     )

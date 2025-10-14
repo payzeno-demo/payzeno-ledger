@@ -54,3 +54,15 @@ class ReconciliationService:
         batches: SettlementBatchRepository,
         items: ReconciliationItemRepository,
         runs: ReconciliationRunRepository,
+        poster: SettlementPoster,
+        publisher: EventPublisher,
+        clock: Clock,
+        settings: "Settings",
+    ) -> None:
+        self._sessions = sessions
+        self._locks = locks
+        self._batches = batches
+        self._items = items
+        self._runs = runs
+        self._poster = poster
+        self._publisher = publisher
