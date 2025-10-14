@@ -40,6 +40,43 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     reverses_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
+    __table_args__ = (
+        # 0007 created this NON-UNIQUE, because the backfill
+        #   purpose || ':' || reference_id || ':'
+        # produced duplicates for pre-existing auth/capture pairs. 0020 dropped it and
+        # created uq_ledger_transaction_idempotency_key CONCURRENTLY in its place, at
+        # 03:05 on the night of the incident, against 41M rows, in 14 seconds.
+        Index(
+            "uq_ledger_transaction_idempotency_key",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index("ix_ledger_transaction_reference", "reference_type", "reference_id"),
+        Index(
+            "ix_ledger_transaction_merchant_posted",
+            "merchant_id",
+            "posted_at",
+            postgresql_ops={"posted_at": "DESC"},
+        ),
+        Index(
+            "ix_ledger_transaction_purpose_posted",
+            "purpose",
+            "posted_at",
+            postgresql_ops={"posted_at": "DESC"},
+        ),
+    )
+
+    entity_name: ClassVar[str] = "settlement_duplicate_audit"
+
     transaction_id: Mapped[str] = mapped_column(Text, primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     amount_minor: Mapped[int | None] = mapped_column(nullable=True)
+    __table_args__ = (
+        Index("ix_settlement_duplicate_audit_key", "idempotency_key"),
+        Index(
+            "pix_settlement_duplicate_audit_unreversed",
+            "detected_at",
+            postgresql_where="reversed_transaction_id is null",
+        ),
+    )
+
