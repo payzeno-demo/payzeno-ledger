@@ -35,11 +35,19 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     """One balanced posting. Immutable once written — corrections are new transactions."""
 
     __tablename__ = "ledger_transaction"
+    purpose: Mapped[str] = mapped_column(ledger_purpose_enum, nullable=False)
     reference_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     reverses_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
+    created_by: Mapped[str] = mapped_column(
+        ledger_actor_enum, nullable=False, server_default="system"
+    )
+    posted_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
     __table_args__ = (
         # 0007 created this NON-UNIQUE, because the backfill
         #   purpose || ':' || reference_id || ':'
