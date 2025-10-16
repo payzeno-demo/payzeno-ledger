@@ -42,3 +42,24 @@ class IdempotencyClaim:
     """
 
     transaction_id: str
+    created: bool
+    fingerprint_matches: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateKeyRow:
+    """One idempotency key that appears on more than one transaction.
+
+    Produced by :meth:`LedgerTransactionRepository.list_duplicate_idempotency_keys` and
+    consumed by ``LedgerAuditService.check_duplicate_settlements`` — invariant (1) of
+    `data-model.md` §6, the check that did not exist on the night of the incident because
+    every check that did exist was a *balance* check and a duplicate settlement balances
+    perfectly.
+    """
+
+    idempotency_key: str
+    count: int
+    currency: str
+    sample_transaction_id: str
+
+
