@@ -33,6 +33,23 @@ def repo() -> LedgerTransactionRepository:
     return LedgerTransactionRepository()
 
 
+def _txn(txn_id: str, key: str, **kw: object) -> LedgerTransaction:
+    defaults: dict[str, object] = {
+        "id": txn_id,
+        "idempotency_key": key,
+        "request_fingerprint": "0" * 64,
+        "purpose": "settle",
+        "merchant_id": "mer_txn_1",
+        "currency": "USD",
+        "livemode": True,
+        "reference_type": "reconciliation_item",
+        "reference_id": "ri_1",
+        "created_by": "reconciliation",
+    }
+    defaults.update(kw)
+    return LedgerTransaction(**defaults)  # type: ignore[arg-type]
+
+
 async def test_add_and_get(session, repo: LedgerTransactionRepository) -> None:
     await repo.add(session, _txn("txn_lt_1", "settle:sb_A:ri_1"))
     await session.flush()
@@ -43,6 +60,24 @@ async def test_add_and_get(session, repo: LedgerTransactionRepository) -> None:
 async def test_get_or_raise_on_a_missing_id(session, repo: LedgerTransactionRepository) -> None:
     with pytest.raises(TransactionNotFoundError):
         await repo.get_or_raise(session, "txn_nope")
+
+
+async def test_find_by_idempotency_key_returns_the_row(
+    session, repo: LedgerTransactionRepository
+) -> None:
+    await repo.add(session, _txn("txn_lt_2", "settle:sb_B:ri_2"))
+    await session.flush()
+
+    found = await repo.find_by_idempotency_key(session, "settle:sb_B:ri_2")
+
+    assert found is not None
+    assert found.id == "txn_lt_2"
+
+
+async def test_find_by_idempotency_key_returns_none_when_absent(
+    session, repo: LedgerTransactionRepository
+) -> None:
+    assert await repo.find_by_idempotency_key(session, "settle:sb_nothing:ri_0") is None
 
 
 async def test_find_by_idempotency_key_cannot_see_an_uncommitted_row(
@@ -71,6 +106,88 @@ async def test_the_idempotency_key_index_is_unique_since_0020(
 
     with pytest.raises(IntegrityError):
         await session.flush()
+
+
+async def test_the_index_is_named_uq_not_ix(session) -> None:
+    # `ix_ledger_transaction_idempotency_key` existed for six months and was NOT unique;
+    # anyone grepping for protection found the name and stopped reading. 0020 renamed it so
+    # the name tells the truth.
+    rows = await session.execute(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'ledger_transaction' AND indexdef LIKE '%idempotency_key%'"
+        )
+    )
+    names = {row[0] for row in rows}
+    assert "uq_ledger_transaction_idempotency_key" in names
+    assert "ix_ledger_transaction_idempotency_key" not in names
+
+
+async def test_claim_idempotency_key_creates_on_first_call(
+    session, repo: LedgerTransactionRepository
+) -> None:
+    claim = await repo.claim_idempotency_key(
+        session,
+        key="settle:sb_E:ri_5",
+        purpose="settle",
+        merchant_id="mer_txn_1",
+        currency="USD",
+        reference_type="reconciliation_item",
+        reference_id="ri_5",
+        created_by="reconciliation",
+        livemode=True,
+        request_fingerprint="a" * 64,
+    )
+
+    assert claim.created is True
+    assert claim.transaction_id
+
+
+async def test_claim_idempotency_key_returns_the_existing_row_on_the_second_call(
+    session, repo: LedgerTransactionRepository
+) -> None:
+    kwargs = {
+        "key": "settle:sb_F:ri_6",
+        "purpose": "settle",
+        "merchant_id": "mer_txn_1",
+        "currency": "USD",
+        "reference_type": "reconciliation_item",
+        "reference_id": "ri_6",
+        "created_by": "reconciliation",
+        "livemode": True,
+        "request_fingerprint": "b" * 64,
+    }
+
+    first = await repo.claim_idempotency_key(session, **kwargs)  # type: ignore[arg-type]
+    second = await repo.claim_idempotency_key(session, **kwargs)  # type: ignore[arg-type]
+
+    assert first.created is True
+    assert second.created is False
+    assert second.transaction_id == first.transaction_id
+
+
+async def test_claim_writes_exactly_one_row(session, repo: LedgerTransactionRepository) -> None:
+    # A claim that inserted a placeholder and then let LedgerPoster insert the real row
+    # would double-write. It does not: the claim IS the insert.
+    for _ in range(3):
+        await repo.claim_idempotency_key(
+            session,
+            key="settle:sb_G:ri_7",
+            purpose="settle",
+            merchant_id="mer_txn_1",
+            currency="USD",
+            reference_type="reconciliation_item",
+            reference_id="ri_7",
+            created_by="reconciliation",
+            livemode=True,
+            request_fingerprint="c" * 64,
+        )
+
+    count = await session.execute(
+        text("SELECT count(*) FROM ledger_transaction WHERE idempotency_key = :k"),
+        {"k": "settle:sb_G:ri_7"},
+    )
+    assert count.scalar_one() == 1
 
 
 async def test_list_by_reference(session, repo: LedgerTransactionRepository) -> None:

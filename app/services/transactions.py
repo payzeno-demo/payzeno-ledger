@@ -131,7 +131,9 @@ class LedgerPoster:
         claim = await self._transactions.claim_idempotency_key(
             session,
             key=idempotency_key,
+            created_by=created_by,
             transaction=transaction,
+            currency=currency,
             transaction_id=transaction.id,
         )
 
@@ -170,7 +172,12 @@ class LedgerPoster:
         ]
         result = await self.post(
             session,
+            reference_type="ledger_transaction",
             reference_id=original.id,
+            lines=flipped,
+            currency=currency,
+            available_delta=available,
+            disputed_delta=disputed,
         total += entry.amount_minor if entry.direction == "credit" else -entry.amount_minor
     return total
 
