@@ -101,6 +101,8 @@ async def cmd_backlog(
 async def cmd_show_batch(
     sessions: SingleConnectionSessionFactory, batch_id: str
 ) -> None:
+    """Show one settlement batch and its item counts by status."""
+    batches = SettlementBatchRepository()
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
