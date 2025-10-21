@@ -26,6 +26,38 @@ from app.errors import NegativeAmountError, UnbalancedTransactionError, Validati
 Direction = Literal["debit", "credit"]
 
 
+def credit(account_type: AccountType, amount_minor: int) -> PostingLine:
+    """Shorthand used by every rule body."""
+    return PostingLine(account_type=account_type, direction="credit", amount_minor=amount_minor)
+
+
+from app.domain.rules.corrections import (  # noqa: E402  (cycle-safe: see module docstring)
+    AdjustmentLinePostingRule,
+    AdjustmentPostingRule,
+    RefundPostingRule,
+    ReversalPostingRule,
+)
+from app.domain.rules.disputes import (  # noqa: E402
+    ChargebackPostingRule,
+    ChargebackReversalPostingRule,
+    DisputePostingRule,
+)
+from app.domain.rules.fees import FeePostingRule, SchemeFeePostingRule  # noqa: E402
+from app.domain.rules.payouts import (  # noqa: E402
+    PayoutPostingRule,
+    PayoutReversalPostingRule,
+    ReserveHoldPostingRule,
+    ReserveReleasePostingRule,
+)
+from app.domain.rules.sale import (  # noqa: E402
+    AuthPostingRule,
+    AuthReleasePostingRule,
+    CapturePostingRule,
+    SettlementFundingPostingRule,
+    SettlementPostingRule,
+    SettlementRefundPostingRule,
+)
+
 #: Rule instances are stateless, so one shared instance per rule is correct and cheap.
 POSTING_RULE_BY_PURPOSE: Final[dict[str, PostingRule]] = {
     "auth": AuthPostingRule(),
@@ -41,5 +73,17 @@ POSTING_RULE_BY_PURPOSE: Final[dict[str, PostingRule]] = {
     "payout_reversal": PayoutReversalPostingRule(),
     "reversal": ReversalPostingRule(),
     "adjustment": AdjustmentPostingRule(),
+}
+
+#: The ONLY place `reconciliation_item.line_type` maps to a rule. `domain-model.md` §8.
+POSTING_RULE_BY_LINE_TYPE: Final[dict[str, PostingRule]] = {
+    "sale": POSTING_RULE_BY_PURPOSE["settle"],
+    "refund": SettlementRefundPostingRule(),
+    "chargeback": ChargebackPostingRule(),
+    "chargeback_reversal": ChargebackReversalPostingRule(),
+    "scheme_fee": SchemeFeePostingRule(),
+    "adjustment": AdjustmentLinePostingRule(),
+    "reserve_hold": ReserveHoldPostingRule(),
+    "reserve_release": POSTING_RULE_BY_PURPOSE["reserve_release"],
 }
 
