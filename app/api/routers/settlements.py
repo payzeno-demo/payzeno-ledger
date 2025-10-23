@@ -89,7 +89,16 @@ def _serialise_batch(batch: Any) -> dict[str, Any]:
 @router.get(
     "/settlement-batches",
     response_model=Paginated[SettlementBatch],
+    summary="List settlement batches",
+)
+async def list_batches(
+    sessions: SessionsDep,
+    repositories: ReposDep,
+    limit: PageLimit,
+    merchant_id: Annotated[str | None, Query()] = None,
+    currency: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
     status_filter: Annotated[str | None, Query(alias="status")] = None,
+    acquirer: Annotated[str | None, Query()] = None,
     cursor: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     """``merchant_id`` is optional here — staff and ops omit it deliberately."""
@@ -120,15 +129,93 @@ async def get_batch(
     sessions: SessionsDep,
     repositories: ReposDep,
     batch_id: Annotated[str, Path(min_length=8)],
+    merchant_id: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    """``merchant_id`` is accepted and ignored for the batch row itself.
+
+    payzeno-api forwards it from the console's scope guard; the ledger does not filter a
+    batch by merchant because a batch spans merchants by construction. The parameter
+    stays in the signature so the caller's contract test passes and so the access log
+    records who asked.
+    """
+    async with sessions.begin() as session:
+        batch = await repositories.settlement_batches.get_or_raise(session, batch_id)
+        return _serialise_batch(batch)
+
+
+@router.post(
+    "/settlement-batches",
     response_model=SettlementBatch,
+    status_code=status.HTTP_201_CREATED,
+    summary="Open a settlement batch",
+)
+async def open_batch(
+    body: OpenSettlementBatchRequest,
+    sessions: SessionsDep,
+    settlements: SettlementsDep,
+    caller: InternalCaller,
+) -> dict[str, Any]:
+    """Idempotent on ``uq_settlement_batch_file`` — re-importing the same acquirer file
+    returns the existing batch rather than creating a second one, which is what makes the
+    import job safe to re-run from the runbook.
+    """
+    async with sessions.begin() as session:
+        batch = await settlements.open_batch(
+            session,
+            acquirer=body.acquirer,
+            currency=body.currency,
+            processing_date=body.processing_date,
+            file_reference=body.file_reference,
+            livemode=body.livemode,
+        )
+        payload = _serialise_batch(batch)
+    logger.info(
+        "settlement_batch_opened",
+        batch_id=payload["id"],
+        acquirer=body.acquirer,
+        file_reference=body.file_reference,
+        caller=caller,
+    )
+    return payload
+
+
+@router.post(
+    "/settlement-batches/{batch_id}/close",
     response_model=SettlementBatch,
+    summary="Close a batch so it becomes reconcilable",
+)
+async def close_batch(
+    sessions: SessionsDep,
+    settlements: SettlementsDep,
+    caller: InternalCaller,
+    batch_id: Annotated[str, Path(min_length=8)],
+) -> dict[str, Any]:
+    """Raises ``BatchNotReconcilableError`` (422) on a batch that is not ``open``.
+
+    Closing is what makes a batch visible to :class:`ReconciliationSweepJob`; until then
+    the importer may still be appending items to it and reconciling half a file would
+    settle half a merchant's day.
+    """
+    async with sessions.begin() as session:
+        batch = await settlements.close_batch(session, batch_id)
+        payload = _serialise_batch(batch)
+    logger.info("settlement_batch_closed", batch_id=batch_id, caller=caller)
+    return payload
+
+
+@router.get(
+    "/settlement-batches/{batch_id}/items",
+    response_model=Paginated[ReconciliationItem],
     summary="List the items in a batch, scoped to one merchant",
 )
 async def list_items(
     sessions: SessionsDep,
     repositories: ReposDep,
     limit: PageLimit,
+    batch_id: Annotated[str, Path(min_length=8)],
     merchant_id: Annotated[str, Query(min_length=8)],
+    status_filter: Annotated[ItemStatusFilter | None, Query(alias="status")] = None,
+    line_type: Annotated[str | None, Query()] = None,
     cursor: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     """``merchant_id`` is **required**. It is merchant money, and an unscoped list is a
@@ -154,6 +241,7 @@ async def list_items(
 
 @router.post(
     "/settlement-batches/{batch_id}/funding",
+    response_model=SettlementBatch,
     summary="Record the bank credit that funded a batch",
 )
 async def record_funding(
@@ -191,3 +279,37 @@ async def record_funding(
 @router.post(
     "/settlement-imports",
     response_model=SettlementImportResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Accept a settlement file pushed by payzeno-billing-legacy",
+)
+async def import_legacy_records(
+    body: SettlementImportRequest,
+    sessions: SessionsDep,
+    settlements: SettlementsDep,
+    repositories: ReposDep,
+    caller: InternalCaller,
+) -> dict[str, Any]:
+    """The Java service pushes records at us instead of us pulling the file.
+
+    Predates :class:`SettlementImportService` and duplicates a good chunk of its matching.
+    It survives because ``LedgerReconciliationExportJob`` is scheduled inside the legacy
+    service's own quartz cluster and moving it is arc MIG work nobody has scheduled.
+    """
+    records = [record.model_dump() for record in body.records]
+    async with sessions.begin() as session:
+        batch_id, item_count = await settlements.import_legacy_records(
+            session,
+            acquirer=body.acquirer,
+            processing_date=body.processing_date,
+            file_reference=body.file_reference,
+            records=records,
+            strategies=repositories.match_strategies,
+        )
+    logger.info(
+        "legacy_settlement_import",
+        batch_id=batch_id,
+        item_count=item_count,
+        file_reference=body.file_reference,
+        caller=caller,
+    )
+    return {"batch_id": batch_id, "item_count": item_count}

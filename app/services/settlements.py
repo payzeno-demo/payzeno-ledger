@@ -82,8 +82,44 @@ class SettlementService:
         batch = SettlementBatch(
             id=new_id("sb"),
             acquirer=acquirer,
+            file_reference=file_reference,
             status="open",
             livemode=livemode,
+            opened_at=self._clock.now(),
+        )
+        await self._batches.add(session, batch)
+        logger.info("settlement_batch_opened", batch_id=batch.id, acquirer=acquirer)
+        return batch
+
+    async def close_batch(self, session: AsyncSession, batch_id: str) -> SettlementBatch:
+        """Close an ``open`` batch and emit ``settlement.batch_closed``."""
+        batch = await self._batches.get(session, batch_id)
+        if batch is None:
+            raise BatchNotFoundError(f"settlement batch {batch_id} not found", batch_id=batch_id)
+        if batch.status != "open":
+            raise BatchNotReconcilableError(
+                f"batch {batch_id} is {batch.status}, not open",
+                batch_id=batch_id,
+                status=batch.status,
+            )
+
+        totals = await self._items.totals_for_batch(session, batch_id)
+        batch.item_count = totals.item_count
+        batch.expected_total_minor = totals.net_minor
+        batch.status = "closed"
+        batch.closed_at = self._clock.now()
+
+        await self._publisher.publish(
+            "settlement.batch_closed",
+            {
+                "batch_id": batch.id,
+                "acquirer": batch.acquirer,
+                "currency": batch.currency,
+                "processing_date": batch.processing_date.isoformat(),
+                "item_count": batch.item_count,
+                "expected_total_minor": batch.expected_total_minor,
+                "closed_at": batch.closed_at.isoformat(),
+            },
             correlation_id=batch.id,
             batch_id=batch.id,
             expected_total_minor=batch.expected_total_minor,
@@ -114,6 +150,38 @@ class SettlementService:
         batch = await self.open_batch(
             session,
             acquirer=acquirer,
+            file_reference=file_reference,
+        )
+
+        items: list[ReconciliationItem] = []
+        for record in records:
+            items.append(
+                ReconciliationItem(
+                    id=new_id("ri"),
+                    batch_id=batch.id,
+                    charge_id=None,
+                    merchant_id=record.get("merchant_id"),
+                    line_type=str(record.get("line_type", "sale")),
+                    gross_minor=int(record.get("gross_minor", 0)),
+                    fee_minor=int(record.get("fee_minor", 0)),
+                    interchange_minor=int(record.get("interchange_minor", 0)),
+                    scheme_fee_minor=int(record.get("scheme_fee_minor", 0)),
+                    net_minor=int(record.get("net_minor", 0)),
+                    currency=str(record.get("currency", currency)).upper(),
+                    livemode=batch.livemode,
+                    acquirer_reference=str(record["acquirer_reference"]),
+                    network_reference=record.get("network_reference"),
+                    status="pending",
+                    match_method="unmatched",
+                    next_attempt_at=self._clock.now(),
+                )
+            )
+        await self._items.add_all(session, items)
+        await match_items(session, items, strategies, clock=self._clock)
+
+        metrics.increment("LegacySettlementImport", acquirer=acquirer)
+        logger.info(
+            "legacy_settlement_import",
             batch_id=batch.id,
             acquirer=acquirer,
             batch = await self._settlements.open_batch(

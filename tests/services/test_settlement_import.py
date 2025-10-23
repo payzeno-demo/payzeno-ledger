@@ -169,6 +169,13 @@ async def test_import_file_carries_line_type_through_from_the_file(sessions_fact
 
     await service.import_file("worldflow", PROCESSING_DATE)
 
+    batch = await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert settlements.closed == [batch.id]
+    assert batch.status == "closed"
+
+
+async def test_import_file_is_a_no_op_for_a_file_already_imported(sessions_factory) -> None:
     first = await service.import_file("worldflow", PROCESSING_DATE)
     second = await service.import_file("worldflow", PROCESSING_DATE)
 
@@ -177,6 +184,13 @@ async def test_import_file_carries_line_type_through_from_the_file(sessions_fact
 
 
 async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    """Worldflow reorders columns between file versions without telling anyone."""
+    reordered = (
+        b"currency,net_minor,line_type,acquirer_reference,gross_minor,fee_minor,"
+        b"interchange_minor,scheme_fee_minor\n"
+        b"USD,9710,SL,WF-3001,10000,290,210,80\n"
+    )
+
     lines = WorldflowCsvParser().parse(reordered)
 
     assert len(lines) == 1
@@ -230,6 +244,11 @@ class _InMemoryBatches:
         self.rows: dict[str, Any] = {}
         self.by_file: dict[str, str] = {}
         self._seq = 0
+
+    async def add(self, session: Any, obj: Any) -> Any:
+        self.rows[obj.id] = obj
+        self.by_file[obj.file_reference] = obj.id
+        return obj
 
     async def get_or_raise(self, session: Any, entity_id: str) -> Any:
         return self.rows[entity_id]

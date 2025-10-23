@@ -48,18 +48,93 @@ class StubSettlements:
         self.closed_already = closed_already
         self.legacy: list[dict[str, Any]] = []
 
+    async def open_batch(self, session: Any, **kwargs: Any) -> Any:
+        self.opened.append(kwargs)
+        return make_batch(
+            batch_id="sb_new",
+            acquirer=kwargs["acquirer"],
+            currency=kwargs["currency"],
+            status="open",
+            processing_date=kwargs["processing_date"],
+            file_reference=kwargs["file_reference"],
+        )
+
+    async def close_batch(self, session: Any, batch_id: str) -> Any:
+        if self.closed_already:
+            raise BatchNotReconcilableError(f"batch {batch_id} is not open", batch_id=batch_id)
+        self.closed.append(batch_id)
+        return make_batch(batch_id=batch_id, status="closed")
+
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        try:
+            return self.rows[entity_id]
+        except KeyError:
+            raise BatchNotFoundError(entity_id=entity_id) from None
+
     async def list_page(self, session: Any, *, cursor: str | None, limit: int, **filters: Any) -> Page:
         self.filters.append(filters)
         return Page(items=list(self.rows.values()), next_cursor=None, has_more=False)
 
 
 class StubItems:
+    async def list_page(self, session: Any, *, cursor: str | None, limit: int, **filters: Any) -> Page:
+        self.filters.append(filters)
+        rows = [
+            row
+            for row in self.rows
+            if filters.get("merchant_id") in (None, row.merchant_id)
+        ]
+        return Page(items=rows, next_cursor=None, has_more=False)
+
+
+class StubFunding:
     def __init__(self) -> None:
         self.recorded: list[dict[str, Any]] = []
+
+    async def record_funding(self, session: Any, **kwargs: Any) -> Any:
+        self.recorded.append(kwargs)
+        return make_batch(batch_id=kwargs["batch_id"], status="funded")
+
+
+class Record:
+    """One line of a legacy push. `import_legacy_records` calls `model_dump()` on each."""
 
     def __init__(self, **fields: Any) -> None:
         self.fields = fields
 
+    def model_dump(self) -> dict[str, Any]:
+        return dict(self.fields)
+
+
+class StubRepositories:
+    """The container's repository namespace, plus the match strategies the legacy import
+    hands to `SettlementService`.
+
+    Three attributes, which is exactly what this router reaches for. Anything else it
+    started using would fail here rather than in staging.
+    """
+
+    def __init__(
+        self,
+        *,
+        batches: "StubBatches | None" = None,
+        items: "StubItems | None" = None,
+    ) -> None:
+        self.settlement_batches = batches or StubBatches()
+        self.reconciliation_items = items or StubItems()
+        self.match_strategies = ["exact_reference", "network_transaction", "amount_window"]
+
+
+def _body(**kwargs: Any) -> Any:
+    return type("Body", (), kwargs)()
+
+
+# --------------------------------------------------------------------------------------
+# batches
+# --------------------------------------------------------------------------------------
+
+
+async def test_open_batch_creates_it(sessions_factory) -> None:
     batch = await open_batch(
         _body(
             acquirer="worldflow",
@@ -91,6 +166,8 @@ async def test_close_batch_returns_the_closed_batch(sessions_factory) -> None:
 async def test_get_batch_returns_it(sessions_factory) -> None:
     batches = StubBatches({"sb_1": make_batch(batch_id="sb_1", status="closed")})
 
+    batches = StubBatches({"sb_1": make_batch(batch_id="sb_1", status="closed")})
+
     """
     items = StubItems()
 
@@ -107,6 +184,43 @@ async def test_listing_items_scopes_to_the_merchant(sessions_factory) -> None:
             make_item(item_id="ri_2", batch_id="sb_1", merchant_id="mer_b"),
         ]
     )
+
+    page = await list_items(
+        sessions_factory, StubRepositories(items=items), 50, "sb_1", "mer_a"
+    )
+
+    assert [row["id"] for row in page["data"]] == ["ri_1"]
+
+
+async def test_listing_items_filters_by_status_and_line_type(sessions_factory) -> None:
+    items = StubItems([make_item(item_id="ri_1", batch_id="sb_1", merchant_id="mer_a")])
+
+    await list_items(
+        sessions_factory,
+        StubRepositories(items=items),
+        50,
+        "sb_1",
+        "mer_a",
+        "retryable",
+        "sale",
+        None,
+    )
+
+    assert items.filters[0]["status"] == "retryable"
+    assert items.filters[0]["line_type"] == "sale"
+
+
+# --------------------------------------------------------------------------------------
+# funding
+# --------------------------------------------------------------------------------------
+
+
+async def test_recording_funding_marks_the_batch_funded(sessions_factory) -> None:
+    """Until a batch is funded its credits do not count toward `compute_available`.
+
+    This route is how the treasury tooling tells the ledger the money actually landed.
+    """
+    funding = StubFunding()
 
     response = await import_legacy_records(
         _body(
