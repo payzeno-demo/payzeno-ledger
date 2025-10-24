@@ -65,6 +65,25 @@ def compute_platform_fee(gross: Money, bps: int, fixed_minor: int) -> Money:
             "fixed fee must not be negative", details={"fixed_minor": fixed_minor}
         )
     variable = apply_bps(gross, bps)
+    # A fee can never exceed the gross it is taken from; a merchant configured with a
+    # nonsense rate would otherwise produce a negative payable leg and an unbalanced
+    # capture posting.
+    capped = min(total, gross.amount_minor)
+    return Money(amount_minor=capped, currency=gross.currency)
+
+
+def apportion_fee(gross: Money, components: Sequence[FeeComponent]) -> FeeBreakdown:
+    """Split a fee across named components with exact largest-remainder reconciliation.
+
+    Only called for ``merchant.pricing_model == 'interchange_plus'``; blended merchants
+    use :func:`compute_platform_fee` and never touch ``merchant_fee_schedule``.
+
+    Each component is quantised ROUND_HALF_UP independently, then the difference between
+    the sum of the parts and the exact total is assigned to :data:`MARKUP_COMPONENT`.
+    """
+    if not components:
+        raise ValidationError("apportion_fee needs at least one component", details={})
+
     parts: dict[str, int] = {}
     for component in components:
         exact = (Decimal(gross.amount_minor) * Decimal(component.bps)) / Decimal(
@@ -72,6 +91,8 @@ def compute_platform_fee(gross: Money, bps: int, fixed_minor: int) -> Money:
         ) + Decimal(component.fixed_minor)
         exact_total += exact
         parts[component.name] = int(exact.quantize(_ONE, rounding=ROUND_HALF_UP))
+
+    remainder = total_minor - sum(parts.values())
 
     sink = MARKUP_COMPONENT if MARKUP_COMPONENT in parts else names[-1]
     parts[sink] += remainder
