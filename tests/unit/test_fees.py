@@ -27,6 +27,31 @@ def _usd(minor: int) -> Money:
 
 def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
     gross = _usd(10_000)
+    breakdown = apportion_fee(gross, components)
+
+    assert isinstance(breakdown, FeeBreakdown)
+    assert set(breakdown.components) == {"interchange", "scheme_fee", "acquirer_markup"}
+    breakdown = apportion_fee(_usd(10_000), [])
+    assert breakdown.total.amount_minor == 0
+    assert breakdown.components == {}
+
+
+@pytest.mark.parametrize(
+    ("gross_minor", "bps", "fixed_minor", "expected_minor"),
+    [
+        # 2.9% + 30c on $100.00 -> 320
+        (10_000, 290, 30, 320),
+        # exact half rounds UP, not to even. 0.5 -> 1.
+        (100, 50, 0, 1),
+        (300, 50, 0, 2),
+        # zero-rated merchants exist (internal test accounts)
+        (10_000, 0, 0, 0),
+        (10_000, 0, 25, 25),
+    ],
+)
+def test_compute_platform_fee_rounds_half_up(
+    gross_minor: int, bps: int, fixed_minor: int, expected_minor: int
+) -> None:
     fee = compute_platform_fee(_usd(100), bps=20_000, fixed_minor=0)
     assert fee.amount_minor <= 100
 

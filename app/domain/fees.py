@@ -65,6 +65,7 @@ def compute_platform_fee(gross: Money, bps: int, fixed_minor: int) -> Money:
             "fixed fee must not be negative", details={"fixed_minor": fixed_minor}
         )
     variable = apply_bps(gross, bps)
+    total = variable.amount_minor + fixed_minor
     # A fee can never exceed the gross it is taken from; a merchant configured with a
     # nonsense rate would otherwise produce a negative payable leg and an unbalanced
     # capture posting.
@@ -83,6 +84,10 @@ def apportion_fee(gross: Money, components: Sequence[FeeComponent]) -> FeeBreakd
     """
     if not components:
         raise ValidationError("apportion_fee needs at least one component", details={})
+
+    names = [c.name for c in components]
+    if len(set(names)) != len(names):
+        raise ValidationError("component names must be unique", details={"components": names})
 
     parts: dict[str, int] = {}
     for component in components:
@@ -113,3 +118,5 @@ def acquirer_markup_minor(fee_minor: int, interchange_minor: int, scheme_fee_min
     ``fee_minor = interchange_minor + scheme_fee_minor + acquirer_markup`` by construction
     (`domain-model.md` §0.1), so the third expense leg of a ``settle`` posting is whatever
     the acquirer kept beyond the pass-through costs.
+    """
+    rate = Decimal(_LEGACY_BLENDED_BPS) / Decimal(BPS_DENOMINATOR)
