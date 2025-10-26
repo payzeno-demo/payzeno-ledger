@@ -65,6 +65,16 @@ class StubSettlements:
         self.closed.append(batch_id)
         return make_batch(batch_id=batch_id, status="closed")
 
+    async def import_legacy_records(self, session: Any, **kwargs: Any) -> tuple[str, int]:
+        self.legacy.append(kwargs)
+        return "sb_legacy", len(kwargs["records"])
+
+
+class StubBatches:
+    def __init__(self, rows: dict[str, Any] | None = None) -> None:
+        self.rows = rows or {}
+        self.filters: list[dict[str, Any]] = []
+
     async def get_or_raise(self, session: Any, entity_id: str) -> Any:
         try:
             return self.rows[entity_id]
@@ -77,6 +87,10 @@ class StubSettlements:
 
 
 class StubItems:
+    def __init__(self, rows: list[Any] | None = None) -> None:
+        self.rows = rows or []
+        self.filters: list[dict[str, Any]] = []
+
     async def list_page(self, session: Any, *, cursor: str | None, limit: int, **filters: Any) -> Page:
         self.filters.append(filters)
         rows = [
@@ -135,6 +149,8 @@ def _body(**kwargs: Any) -> Any:
 
 
 async def test_open_batch_creates_it(sessions_factory) -> None:
+    settlements = StubSettlements()
+
     batch = await open_batch(
         _body(
             acquirer="worldflow",
@@ -154,6 +170,13 @@ async def test_open_batch_creates_it(sessions_factory) -> None:
 async def test_close_batch_returns_the_closed_batch(sessions_factory) -> None:
     settlements = StubSettlements()
 
+    batch = await close_batch(sessions_factory, settlements, CALLER, "sb_1")
+
+    assert batch["status"] == "closed"
+    assert settlements.closed == ["sb_1"]
+
+
+async def test_closing_a_batch_that_is_not_open_is_422(sessions_factory) -> None:
     """`batch_not_reconcilable`. The state machine is the guard, not the caller."""
     settlements = StubSettlements(closed_already=True)
 
@@ -166,8 +189,53 @@ async def test_close_batch_returns_the_closed_batch(sessions_factory) -> None:
 async def test_get_batch_returns_it(sessions_factory) -> None:
     batches = StubBatches({"sb_1": make_batch(batch_id="sb_1", status="closed")})
 
+    batch = await get_batch(
+        sessions_factory, StubRepositories(batches=batches), "sb_1", None
+    )
+
+    assert batch["id"] == "sb_1"
+
+
+async def test_getting_an_unknown_batch_is_a_404(sessions_factory) -> None:
+    batches = StubBatches()
+
+    with pytest.raises(BatchNotFoundError) as excinfo:
+        await get_batch(
+            sessions_factory, StubRepositories(batches=batches), "sb_ghost", None
+        )
+
+    assert excinfo.value.http_status == 404
+
+
+async def test_listing_batches_passes_its_filters(sessions_factory) -> None:
     batches = StubBatches({"sb_1": make_batch(batch_id="sb_1", status="closed")})
 
+    page = await list_batches(
+        sessions_factory,
+        StubRepositories(batches=batches),
+        50,
+        "mer_api",
+        "USD",
+        "closed",
+        "worldflow",
+        None,
+    )
+
+    assert page["has_more"] is False
+    assert batches.filters[0]["status"] == "closed"
+    assert batches.filters[0]["acquirer"] == "worldflow"
+
+
+# --------------------------------------------------------------------------------------
+# items — the tenancy control
+# --------------------------------------------------------------------------------------
+
+
+async def test_listing_items_requires_a_merchant(sessions_factory) -> None:
+    """A batch holds every merchant's lines for that acquirer and day.
+
+    Unscoped, this hands payzeno-api another merchant's settlement detail, and
+    payzeno-api forwards whatever the ledger returns.
     """
     items = StubItems()
 
@@ -221,6 +289,31 @@ async def test_recording_funding_marks_the_batch_funded(sessions_factory) -> Non
     This route is how the treasury tooling tells the ledger the money actually landed.
     """
     funding = StubFunding()
+
+    batch = await record_funding(
+        _body(bank_reference="WIRE-99812", amount_minor=1_982_000, value_date=PROCESSING_DATE),
+        sessions_factory,
+        funding,
+        CALLER,
+        "sb_1",
+    )
+
+    assert batch["status"] == "funded"
+    assert funding.recorded[0]["bank_reference"] == "WIRE-99812"
+
+
+# --------------------------------------------------------------------------------------
+# §10.6 — the route payzeno-billing-legacy pushes to
+# --------------------------------------------------------------------------------------
+
+
+async def test_the_legacy_import_route_reports_what_it_staged(sessions_factory) -> None:
+    """`LedgerReconciliationExportJob` on the Java side calls this.
+
+    It predates `SettlementImportService` and duplicates about forty lines of its
+    matching. Converging them is arc MIG work that nobody has scheduled.
+    """
+    settlements = StubSettlements()
 
     response = await import_legacy_records(
         _body(
