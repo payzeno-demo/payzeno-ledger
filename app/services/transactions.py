@@ -132,7 +132,9 @@ class LedgerPoster:
             session,
             key=idempotency_key,
             purpose=purpose,
+            reference_type=reference_type,
             created_by=created_by,
+            livemode=livemode,
             # Somebody else owns the key. Nothing has been written by us and — critically
             # for the caller — no entries and no external call have happened.
             existing = await self._transactions.get_or_raise(session, claim.transaction_id)
@@ -151,6 +153,7 @@ class LedgerPoster:
             session,
             transaction=transaction,
             currency=currency,
+            livemode=livemode,
             transaction_id=transaction.id,
         )
 
@@ -159,6 +162,7 @@ class LedgerPoster:
         logger.info(
             "ledger_transaction_posted",
             purpose=purpose,
+            merchant_id=merchant_id,
             merchant_id=transaction.merchant_id,
             correlation_id=transaction.id,
             livemode=transaction.livemode,
@@ -193,10 +197,12 @@ class LedgerPoster:
             idempotency_key=idempotency_key,
             purpose="reversal",
             merchant_id=original.merchant_id,
+            currency=original.currency,
             reference_type="ledger_transaction",
             reference_id=original.id,
             lines=flipped,
             created_by=created_by,
+            transaction_id=result.transaction.id,
             currency=currency,
             available_delta=available,
             disputed_delta=disputed,
