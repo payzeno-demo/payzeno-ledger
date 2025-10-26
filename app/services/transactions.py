@@ -131,7 +131,24 @@ class LedgerPoster:
         claim = await self._transactions.claim_idempotency_key(
             session,
             key=idempotency_key,
+            purpose=purpose,
             created_by=created_by,
+            # Somebody else owns the key. Nothing has been written by us and — critically
+            # for the caller — no entries and no external call have happened.
+            existing = await self._transactions.get_or_raise(session, claim.transaction_id)
+            if on_conflict == "return_existing":
+                return PostResult(transaction=existing, created=False)
+            raise DuplicateSettlementError(
+                f"idempotency_key {idempotency_key} already posted",
+                idempotency_key=idempotency_key,
+                existing_transaction_id=claim.transaction_id,
+                fingerprint_matches=claim.fingerprint_matches,
+            )
+
+        transaction = await self._transactions.get_or_raise(session, claim.transaction_id)
+
+        entries = await self._materialise_entries(
+            session,
             transaction=transaction,
             currency=currency,
             transaction_id=transaction.id,
@@ -141,6 +158,7 @@ class LedgerPoster:
 
         logger.info(
             "ledger_transaction_posted",
+            purpose=purpose,
             merchant_id=transaction.merchant_id,
             correlation_id=transaction.id,
             livemode=transaction.livemode,
@@ -172,9 +190,13 @@ class LedgerPoster:
         ]
         result = await self.post(
             session,
+            idempotency_key=idempotency_key,
+            purpose="reversal",
+            merchant_id=original.merchant_id,
             reference_type="ledger_transaction",
             reference_id=original.id,
             lines=flipped,
+            created_by=created_by,
             currency=currency,
             available_delta=available,
             disputed_delta=disputed,
