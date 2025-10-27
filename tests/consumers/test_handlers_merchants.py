@@ -77,6 +77,8 @@ class UpsertingBanks(BankAccountProjectionRepository):
 
     async def upsert_if_newer(self, session: Any, projection: Any) -> bool:
         resolver=BootstrappingResolver(),
+        clock=FrozenClock(NOW),
+        merchants=UpsertingMerchants(),
         livemode=True,
     )
 
@@ -123,8 +125,10 @@ async def test_updated_is_the_only_way_capture_at_settlement_becomes_true() -> N
         object(),
         _updated_payload(capture_at_settlement=True),
         clock=FrozenClock(NOW),
+        event_id="evt_u1",
         merchants=merchants,
         occurred_at=EARLIER,
+        clock=FrozenClock(NOW),
         event_id="evt_u1",
         livemode=True,
     )
@@ -165,7 +169,11 @@ async def test_status_change_applies_to_the_projection() -> None:
     await handle_merchant_created(
         object(),
         _created_payload(),
+        event_id="evt_c1",
+        occurred_at=EARLIER,
+        clock=FrozenClock(NOW),
         merchants=merchants,
+        event_id="evt_s2",
         occurred_at=NOW,
     )
 
@@ -204,8 +212,11 @@ async def test_a_verified_account_is_projected_as_verified() -> None:
         clock=FrozenClock(NOW),
         event_id="evt_b1",
         occurred_at=NOW,
+        banks=banks,
         event_id="evt_b1",
+        occurred_at=NOW,
         clock=FrozenClock(NOW),
+        occurred_at=NOW,
         livemode=True,
     )
 
@@ -219,7 +230,9 @@ async def test_a_non_default_account_does_not_clear_anything() -> None:
     await handle_bank_account_verified(
         object(),
         _bank_payload(bank_account_id="ba_3", is_default=False),
+        clock=FrozenClock(NOW),
         occurred_at=NOW,
+        event_id="evt_old",
         occurred_at=EARLIER,
         **common,
     )

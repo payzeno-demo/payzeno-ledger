@@ -54,19 +54,156 @@ async def handle_payment_authorized(
 
     projection = SettlementCharge(
         charge_id=data["charge_id"],
+        amount_minor=data["amount_minor"],
         currency=data["currency"],
+        network_transaction_id=data.get("network_transaction_id"),
         capture_method=data["capture_method"],
+        capture_at_settlement=bool(data["capture_at_settlement"]),
+        platform_fee_fixed_minor=int(data.get("platform_fee_fixed_minor", 0)),
+        livemode=livemode,
+        authorized_at=_parse(data["authorized_at"]),
         updated_at=clock.now(),
+        source_event_id=event_id,
+        currency=data["currency"],
+        reference_type="charge",
         lines=lines,
         merchant_id=data["merchant_id"],
+        capture_at_settlement=projection.capture_at_settlement,
+    )
+
+
+async def handle_payment_captured(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    charges: SettlementChargeRepository,
+    ledger: LedgerPoster,
+    clock: Clock,
+    event_id: str,
+    occurred_at: datetime,
+    livemode: bool,
+) -> None:
+    """Stamp ``captured_at`` and post the capture legs (fees, reserve, payable)."""
+    data = _validated(PaymentCapturedPayload, payload)
+    charge = await charges.get_or_raise(session, data["charge_id"])
+    if charge.source_occurred_at > occurred_at:
+        logger.info("payment_captured_stale", charge_id=data["charge_id"])
+        return
+
+    charge.captured_at = _parse(data["captured_at"])
+    charge.updated_at = clock.now()
+
+    rule = POSTING_RULE_BY_LINE_TYPE["capture"]
+    lines = rule.build(
+        PostingContext(
+            merchant_id=data["merchant_id"],
+            currency=data["currency"],
+            livemode=livemode,
+            gross_minor=data["captured_amount_minor"],
+            fee_minor=0,
+            net_minor=data["captured_amount_minor"],
+            interchange_minor=0,
+            scheme_fee_minor=0,
+            reserve_bps=charge.reserve_bps,
+            platform_fee_bps=charge.platform_fee_bps,
+            platform_fee_fixed_minor=charge.platform_fee_fixed_minor,
+        )
+    )
+    await ledger.post(
+        session,
+        idempotency_key=ledger_key("capture", data["merchant_id"], data["charge_id"]),
         purpose="capture",
         merchant_id=data["merchant_id"],
         reference_type="charge",
-        reference_type="charge",
         lines=lines,
+        created_by="system",
+        on_conflict="return_existing",
+    )
+
+
+async def handle_payment_canceled(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    ledger: LedgerPoster,
+    event_id: str,
+    livemode: bool,
+) -> None:
+    """Release an authorisation that was never captured."""
+    charge_id = payload.get("charge_id")
+    if charge_id is None:
+        # An intent cancelled before any charge existed has nothing to release.
+        return
+    rule = POSTING_RULE_BY_LINE_TYPE["auth_release"]
+    lines = rule.build(
+        PostingContext(
+            merchant_id=payload["merchant_id"],
+            currency=payload["currency"],
+            livemode=livemode,
+            gross_minor=payload["released_amount_minor"],
+            fee_minor=0,
+            net_minor=payload["released_amount_minor"],
+            interchange_minor=0,
+            scheme_fee_minor=0,
+            reserve_bps=0,
+            platform_fee_bps=0,
+            platform_fee_fixed_minor=0,
+        )
+    )
+    await ledger.post(
+        session,
+        reference_type="charge",
+        reference_id=charge_id,
+        lines=lines,
+        on_conflict="return_existing",
+    )
+
+
+async def handle_refund_created(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    ledger: LedgerPoster,
+    event_id: str,
+    livemode: bool,
+) -> None:
+    """Post the refund.
+
+    A refund against an unsettled charge nets into the batch rather than moving money,
+    so nothing is posted here — the acquirer will file a ``refund`` settlement line and
+    the reconciliation path will handle it.
+    """
+    data = _validated(RefundCreatedPayload, payload)
+    if data.get("nets_against_settlement"):
+        logger.info(
+            "refund_deferred_to_settlement",
+            refund_id=data["refund_id"],
+            charge_id=data["charge_id"],
+        )
+        return
+
+    rule = POSTING_RULE_BY_LINE_TYPE["refund"]
+    lines = rule.build(
+        PostingContext(
+            merchant_id=data["merchant_id"],
+            currency=data["currency"],
+            livemode=livemode,
+            gross_minor=data["amount_minor"],
+            fee_minor=0,
+            net_minor=data["amount_minor"],
+            interchange_minor=0,
+            scheme_fee_minor=0,
+            reserve_bps=0,
+            platform_fee_bps=0,
+            platform_fee_fixed_minor=0,
+        )
+    )
+    await ledger.post(
+        session,
         idempotency_key=ledger_key("refund", data["merchant_id"], data["refund_id"]),
         purpose="refund",
         currency=data["currency"],
+        reference_type="refund",
         reference_id=data["refund_id"],
         on_conflict="return_existing",
     )
@@ -114,6 +251,11 @@ async def handle_dispute_opened(
         purpose="dispute",
         merchant_id=data["merchant_id"],
         reference_type="dispute",
+        dispute_id=data["dispute_id"],
+        merchant_id=data["merchant_id"],
+        idempotency_key=ledger_key("disputewon", payload["merchant_id"], payload["dispute_id"]),
+        merchant_id=payload["merchant_id"],
+        currency=payload["currency"],
         livemode=livemode,
         lines=lines,
         on_conflict="return_existing",
