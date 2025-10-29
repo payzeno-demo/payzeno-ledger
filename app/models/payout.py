@@ -71,15 +71,39 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     """One outbound (or, for ``debit_ach``, inbound) bank transfer."""
 
     __tablename__ = "payout"
+    entity_name: ClassVar[str] = "payout"
+
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     status: Mapped[str] = mapped_column(
         payout_status_enum, nullable=False, server_default="scheduled"
     )
+    method: Mapped[str] = mapped_column(payout_method_enum, nullable=False)
+
     arrival_estimate: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
+    ledger_transaction_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
+    )
     #: The rail's own reference, returned by `PayoutInitiator.initiate`.
     bank_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     initiated_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    def exceeds_rail_limit(self) -> bool:
+        """Whether the amount is over the rail's per-transfer ceiling.
+
+        ``PayoutInitiator.initiate`` checks this and raises
+        :class:`BankAccountUnusableError` rather than letting the rail reject the file
+        hours later, when the money has already left ``merchant_payable``.
+        """
+        limit = RAIL_LIMIT_MINOR.get(self.method)
+        return limit is not None and self.amount_minor > limit
+
+    def is_merchant_debit(self) -> bool:
+        """``debit_ach`` pulls funds *from* the merchant on a negative balance.
+
+        Created by ``NegativeBalanceJob`` past the escalation threshold. It runs the same
+        state machine and posts Dr ``cash`` / Cr ``merchant_payable``.
+        """
+        return self.method == "debit_ach"

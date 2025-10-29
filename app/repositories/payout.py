@@ -59,6 +59,10 @@ class PayoutRepository(BaseRepository[Payout]):
         the same balance twice. Note what this read cannot see: a payout another
         connection has inserted but not committed. That is why the calculator runs under
         the merchant-currency advisory lock, and why the partial index is unique.
+        """One merchant's payouts, newest first. Uses ``ix_payout_merchant_created``."""
+        stmt = select(Payout).where(Payout.merchant_id == merchant_id)
+        if status is not None:
+            stmt = stmt.where(Payout.status == status)
         stmt = stmt.order_by(Payout.created_at.desc()).limit(limit)
         return list((await session.execute(stmt)).scalars().all())
 
@@ -68,6 +72,14 @@ class PayoutRepository(BaseRepository[Payout]):
         *,
         merchant_id: str,
         currency: str,
+        livemode: bool = True,
+    ) -> Payout | None:
+        """The one in-flight payout for this merchant and currency, if any.
+
+        There can be at most one, because ``pix_payout_in_flight`` is unique. The service
+        checks this to return a friendly ``payout_blocked`` instead of letting the insert
+        raise an ``IntegrityError`` the caller cannot interpret — but the check is a
+        courtesy and the index is the guarantee, in that order.
         """Record that the rail accepted the instruction."""
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "in_transit"
@@ -114,3 +126,13 @@ class PayoutRepository(BaseRepository[Payout]):
         alternative — a terminal ``failed`` payout whose debit of ``merchant_payable`` is
         never reversed — destroys the merchant's balance permanently. Invariant (7) of
         `data-model.md` §6 checks it nightly.
+        """
+        payout = await self.get_or_raise(session, payout_id)
+        payout.status = "canceled"
+        payout.updated_at = at
+        await session.flush()
+        return payout
+
+    async def count_by_status(
+        self, session: AsyncSession, *, merchant_id: str | None = None
+    ) -> dict[str, int]:
