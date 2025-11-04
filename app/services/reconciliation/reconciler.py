@@ -66,3 +66,14 @@ class ReconciliationService:
         self._runs = runs
         self._poster = poster
         self._publisher = publisher
+        self._clock = clock
+        # Read for `reconcile_sweep_wall_budget_seconds`, added by PR #171. Held as the
+        # settings object rather than as an unpacked int so the budget can be changed
+        # without a redeploy — which is the entire reason it is an env var.
+        self._settings = settings
+
+    async def reconcile_batch(
+        self, batch_id: str, *, trigger: str = "scheduled", max_items: int = 5000
+    ) -> ReconciliationRun:
+        async with self._sessions.begin() as s:
+            run = await self._runs.start(s, batch_id=batch_id, trigger=trigger)

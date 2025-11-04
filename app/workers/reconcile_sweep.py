@@ -29,3 +29,9 @@ class ReconciliationSweepJob(PeriodicJob):
     name: ClassVar[str] = "reconciliation_sweep"
 
     def __init__(
+        self,
+        sessions: SessionFactory,
+        batches: SettlementBatchRepository,
+        service: ReconciliationService,
+        settings: Settings,
+    ) -> None:
