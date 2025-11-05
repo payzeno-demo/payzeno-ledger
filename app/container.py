@@ -169,6 +169,7 @@ class Container:
                 "nordpay": NordpayClient(settings),
                 "sandbox": SandboxProcessorClient(),
             },
+            breaker=self.breaker,
             default_acquirer="worldflow",
         )
 
@@ -225,6 +226,7 @@ class Container:
             sessions=self.sessions,
             items=repos.items,
             flags=self.flags,
+            items=repos.items,
             batches=repos.batches,
             clock=self.clock,
         )
@@ -254,6 +256,8 @@ class Container:
         self.payout_service = PayoutService(
             calculator=self.payout_calculator,
             initiators=self.payout_initiators,
+            publisher=self.publisher,
+            flags=self.flags,
             banks=repos.banks,
             settings=settings,
             fundings=repos.fundings,
@@ -277,6 +281,10 @@ class Container:
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
+            transactions=repos.transactions,
+            clock=self.clock,
+        )
+        self.merchant_event_consumer = MerchantEventConsumer(
             sessions=self.sessions,
             sqs_client_factory=sqs_factory,
             banks=repos.banks,
