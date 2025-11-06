@@ -103,7 +103,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="payzeno-ledger",
         version="1.0.0",
+        description=DESCRIPTION,
+        docs_url=None,          # internal service; no interactive docs on a money path
         redoc_url=None,
+        openapi_url="/openapi.json",
         lifespan=lifespan,
     )
 
