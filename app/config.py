@@ -67,10 +67,13 @@ class Settings(BaseSettings):
     payout_cutoff_faster_payments_utc: str = "17:30"
 
     settlement_import_enabled: bool = True
+    funding_match_tolerance_bps: int = 5
+
     # -- observability -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     otel_exporter_otlp_endpoint: str | None = None
 
+    @field_validator("log_level", mode="before")
     @classmethod
     @classmethod
     @property
