@@ -77,3 +77,14 @@ class ReconciliationService:
     ) -> ReconciliationRun:
         async with self._sessions.begin() as s:
             run = await self._runs.start(s, batch_id=batch_id, trigger=trigger)
+        run_id = run.id
+
+        stats = ReconcilePassStats()
+
+        # A dedicated session held open for the whole pass, purely to hold the batch
+        # advisory lock. Item work happens in its own short transactions so we never
+        # hold 5000 rows' worth of locks (PAY-1402).
+        async with self._sessions.begin() as guard:
+            await self._locks.acquire_batch_lock(guard, batch_id)
+
+            async with self._sessions.begin() as read_session:
