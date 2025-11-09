@@ -184,6 +184,7 @@ class Container:
         self.ledger_poster = LedgerPoster(
             accounts=repos.accounts,
             balances=repos.balance_cache,
+            publisher=self.publisher,
             clock=self.clock,
         )
         self.balance_service = BalanceService(
@@ -193,6 +194,7 @@ class Container:
             accounts=repos.accounts,
             merchants=repos.merchants,
             processor=self.processor,
+            publisher=self.publisher,
             flags=self.flags,
             metrics=metrics,
             clock=self.clock,
@@ -217,6 +219,7 @@ class Container:
             strategies=self.match_strategies,
             poster=self.settlement_poster,
             publisher=self.publisher,
+            clock=self.clock,
             settings=settings,
         )
         # `locks` arrived here in PR #171 (PAY-2043) and is the reason that hotfix could
@@ -259,6 +262,7 @@ class Container:
             publisher=self.publisher,
             flags=self.flags,
             banks=repos.banks,
+            calendar=self.calendar,
             settings=settings,
             fundings=repos.fundings,
             batches=repos.batches,
@@ -266,11 +270,15 @@ class Container:
             clock=self.clock,
         )
         self.capture_service = DeferredCaptureService(
+            sessions=self.sessions,
             attempts=repos.captures,
             processor=self.processor,
             clock=self.clock,
         )
         self.invoice_service = InvoiceStagingService(
+            staging=repos.invoice_staging, clock=self.clock
+        )
+        self.audit_service = LedgerAuditService(
             clock=self.clock,
         )
         self.adjustment_service = AdjustmentService(
@@ -287,6 +295,7 @@ class Container:
         self.merchant_event_consumer = MerchantEventConsumer(
             sessions=self.sessions,
             sqs_client_factory=sqs_factory,
+            settings=settings,
             banks=repos.banks,
             clock=self.clock,
         )
