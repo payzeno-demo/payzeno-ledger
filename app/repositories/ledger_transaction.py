@@ -63,3 +63,14 @@ class DuplicateKeyRow:
     sample_transaction_id: str
 
 
+class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
+    """Reads and writes ``ledger_transaction`` rows.
+
+    Only ``LedgerPoster`` inserts through here on the business path. Everything else
+    reads.
+    """
+
+    model: ClassVar[type[LedgerTransaction]] = LedgerTransaction
+    not_found_error: ClassVar[type[TransactionNotFoundError]] = TransactionNotFoundError
+
+    def _default_order(self) -> ColumnElement[Any]:
