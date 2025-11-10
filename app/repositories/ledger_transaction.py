@@ -74,3 +74,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
     not_found_error: ClassVar[type[TransactionNotFoundError]] = TransactionNotFoundError
 
     def _default_order(self) -> ColumnElement[Any]:
+        """Paginate on the id, which is a ULID and therefore time-ordered already."""
+        return LedgerTransaction.id
+
+    async def find_by_idempotency_key(
+        self, session: AsyncSession, key: str
+    ) -> LedgerTransaction | None:
+        """Return the transaction holding this idempotency key, if one is committed.
+
+        ``.scalars().first()`` and not ``.one_or_none()``: the ``0007`` backfill produced
+        genuine duplicate keys for pre-existing auth/capture pairs, and ``one_or_none()``
+        would turn a six-year-old data artefact into a 500 on a read path. It also means
