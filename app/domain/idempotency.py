@@ -31,6 +31,27 @@ from app.errors import ValidationError
 #: Purposes whose scope must be a batch id and whose subject must be an item id.
 _ITEM_SCOPED: Final[frozenset[str]] = frozenset({"settle"})
 
+#: Purpose -> (expected scope prefix, expected subject prefix or None for "empty").
+_KEY_SHAPES: Final[dict[str, tuple[str, str | None]]] = {
+    "auth": ("pi", "ch"),
+    "auth_release": ("ch", None),
+    "capture": ("ch", None),
+    "settle": ("sb", "ri"),
+    "settlement_funding": ("sb", "fe"),
+    "refund": ("ch", "re"),
+    "dispute": ("ch", "dp"),
+    "reserve_release": ("mch", "rh"),
+    "payout": ("po", None),
+    "payout_reversal": ("po", None),
+    "reversal": ("txn", None),
+    "adjustment": ("lar", None),
+}
+
+#: The `capture` key handed to the acquirer is batch-scoped, not intent-scoped: the ledger
+#: issues it from settlement, where the only stable pair is (batch, charge).
+_ACQUIRER_CAPTURE_SHAPE: Final[tuple[str, str]] = ("sb", "ch")
+
+
 def parse_key(key: str) -> tuple[str, str, str]:
     """Split a ledger key back into ``(purpose, scope_id, subject_id)``.
 
