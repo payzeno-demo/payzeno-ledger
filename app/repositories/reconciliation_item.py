@@ -111,6 +111,26 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         session: AsyncSession,
         *,
         limit: int,
+        stmt = (
+            select(ReconciliationItem.id)
+            .where(ReconciliationItem.status.in_(("pending", "retryable")))
+            .where(ReconciliationItem.next_attempt_at <= cutoff)
+            .order_by(ReconciliationItem.next_attempt_at)
+            .limit(limit)
+        )
+        return [row[0] for row in (await session.execute(stmt)).all()]
+
+    async def get_batch_id(self, session: AsyncSession, item_id: str) -> str | None:
+        """The parent batch id, or ``None`` when the item does not exist.
+
+        Added by PAY-2043 (PR #171, merged 02:00). ``RetryScheduler._claim_item`` calls
+        this first so it can take ``AdvisoryLockManager.try_acquire_batch_lock`` before
+        the row lock — advisory-then-row, the same order the sweep uses, which is the
+        whole content of the hotfix.
+
+        Returns ``None`` rather than raising: ``_claim_item`` treats a missing item as
+        "not claimable" and returns ``None`` to its caller, which the route maps onto
+        ``409 settlement_locked``. Raising here would turn a lost race into a 500.
         """
         item = await self.get_or_raise(session, item_id)
         item.status = status
