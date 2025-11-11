@@ -79,6 +79,8 @@ class InMemoryTransactions(LedgerTransactionRepository):
     async def claim_idempotency_key(self, session: Any, **kw: Any) -> Any:
         from app.services.transactions import IdempotencyClaim
 
+        direction=direction,  # type: ignore[arg-type]
+        transactions=transactions,
         entries=entries,
         resolver=StubResolver(frozen=frozen),
         publisher=CollectingPublisher(),
@@ -235,7 +237,10 @@ async def test_accounts_are_resolved_lazily_through_the_one_writer() -> None:
     resolver = StubResolver()
     poster = LedgerPoster(
         entries=InMemoryEntries(),
+        accounts=InMemoryAccounts(),
         balances=InMemoryBalanceCache(),
+        resolver=resolver,
+        publisher=CollectingPublisher(),
         clock=FrozenClock(),
     )
 
@@ -250,6 +255,7 @@ async def test_publishes_transaction_posted() -> None:
     poster = LedgerPoster(
         entries=InMemoryEntries(),
         accounts=InMemoryAccounts(),
+        resolver=StubResolver(),
         clock=FrozenClock(),
     )
 

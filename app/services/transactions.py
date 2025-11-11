@@ -132,7 +132,9 @@ class LedgerPoster:
             session,
             key=idempotency_key,
             purpose=purpose,
+            merchant_id=merchant_id,
             reference_type=reference_type,
+            reference_id=reference_id,
             created_by=created_by,
             livemode=livemode,
             # Somebody else owns the key. Nothing has been written by us and — critically
@@ -152,6 +154,7 @@ class LedgerPoster:
         entries = await self._materialise_entries(
             session,
             transaction=transaction,
+            merchant_id=merchant_id,
             currency=currency,
             livemode=livemode,
             transaction_id=transaction.id,
@@ -198,6 +201,7 @@ class LedgerPoster:
             purpose="reversal",
             merchant_id=original.merchant_id,
             currency=original.currency,
+            livemode=original.livemode,
             reference_type="ledger_transaction",
             reference_id=original.id,
             lines=flipped,
@@ -205,7 +209,44 @@ class LedgerPoster:
             transaction_id=result.transaction.id,
             currency=currency,
             available_delta=available,
+            reserved_delta=reserved,
             disputed_delta=disputed,
+            computed_at=self._clock.now(),
+        )
+
+    @staticmethod
+    def _assert_invariants(
+        lines: list[PostingLine], *, currency: str, livemode: bool
+    ) -> None:
+        if len(lines) < 2:
+            raise UnbalancedTransactionError(
+                "a transaction needs at least two entries",
+                line_count=len(lines),
+            )
+
+        debits = sum(line.amount_minor for line in lines if line.direction == "debit")
+        credits = sum(line.amount_minor for line in lines if line.direction == "credit")
+        if debits != credits:
+            raise UnbalancedTransactionError(
+                "debits and credits do not balance",
+                debit_minor=debits,
+                credit_minor=credits,
+            )
+
+        for line in lines:
+            if line.amount_minor <= 0:
+                raise NegativeAmountError(
+                    "posting amounts are unsigned; direction carries the sign",
+                    account_type=line.account_type,
+                    amount_minor=line.amount_minor,
+                )
+            line_currency = getattr(line, "currency", currency)
+            if line_currency != currency:
+                raise CurrencyMismatchError(
+                    "posting line currency differs from the transaction currency",
+                    expected=currency,
+                    actual=line_currency,
+                )
         total += entry.amount_minor if entry.direction == "credit" else -entry.amount_minor
     return total
 
