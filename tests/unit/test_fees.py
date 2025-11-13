@@ -31,6 +31,12 @@ def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
 
     assert isinstance(breakdown, FeeBreakdown)
     assert set(breakdown.components) == {"interchange", "scheme_fee", "acquirer_markup"}
+    components = [
+        FeeComponent(name="interchange", bps=100, fixed_minor=0),
+        FeeComponent(name="scheme_fee", bps=100, fixed_minor=0),
+        FeeComponent(name="acquirer_markup", bps=101, fixed_minor=0),
+    ]
+
     breakdown = apportion_fee(_usd(10_000), [])
     assert breakdown.total.amount_minor == 0
     assert breakdown.components == {}
@@ -52,6 +58,12 @@ def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
 def test_compute_platform_fee_rounds_half_up(
     gross_minor: int, bps: int, fixed_minor: int, expected_minor: int
 ) -> None:
+    fee = compute_platform_fee(_usd(gross_minor), bps=bps, fixed_minor=fixed_minor)
+    assert fee.amount_minor == expected_minor
+    assert fee.currency == "USD"
+
+
+def test_compute_platform_fee_is_exponent_aware_for_jpy() -> None:
     fee = compute_platform_fee(_usd(100), bps=20_000, fixed_minor=0)
     assert fee.amount_minor <= 100
 

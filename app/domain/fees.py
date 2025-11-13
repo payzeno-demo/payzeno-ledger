@@ -89,6 +89,7 @@ def apportion_fee(gross: Money, components: Sequence[FeeComponent]) -> FeeBreakd
     if len(set(names)) != len(names):
         raise ValidationError("component names must be unique", details={"components": names})
 
+    exact_total = Decimal(0)
     parts: dict[str, int] = {}
     for component in components:
         exact = (Decimal(gross.amount_minor) * Decimal(component.bps)) / Decimal(
@@ -118,5 +119,24 @@ def acquirer_markup_minor(fee_minor: int, interchange_minor: int, scheme_fee_min
     ``fee_minor = interchange_minor + scheme_fee_minor + acquirer_markup`` by construction
     (`domain-model.md` §0.1), so the third expense leg of a ``settle`` posting is whatever
     the acquirer kept beyond the pass-through costs.
+    """Fallback dispute fee when `dispute_fee_schedule` has no effective row."""
+    minor = DEFAULT_DISPUTE_FEE_BY_CURRENCY.get(currency)
+    if minor is None:
+        raise ValidationError("no default dispute fee", details={"currency": currency})
+    return Money(amount_minor=minor, currency=currency)
+
+
+def legacy_blended_fee(gross: Money) -> Money:
+    """The pre-2019 blended calculation, bit-for-bit compatible with the Java biller.
+
+    .. deprecated:: month 4
+        Superseded by :func:`compute_platform_fee`, which reads the merchant's own
+        ``platform_fee_bps`` instead of a hardcoded house rate. Kept because
+        ``tests/unit/test_fees.py`` asserts parity against
+        ``LegacyBlendedFeeCalculator`` fixtures exported from payzeno-billing-legacy, and
+        because :func:`blended_or_legacy` still routes pre-cutover merchants through it.
+
+    The Java version truncated at four decimal places before scaling to minor units.
+    Reproducing that truncation is the entire reason this is not a one-liner.
     """
     rate = Decimal(_LEGACY_BLENDED_BPS) / Decimal(BPS_DENOMINATOR)
