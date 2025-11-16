@@ -163,6 +163,55 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         what the acquirer says it will pay — and the funding matcher later compares a real
         bank credit against it within ``FUNDING_MATCH_TOLERANCE_BPS``.
         """
+        stmt = select(
+            func.count(),
+            func.coalesce(func.sum(ReconciliationItem.gross_minor), 0),
+            func.coalesce(func.sum(ReconciliationItem.fee_minor), 0),
+            func.coalesce(func.sum(ReconciliationItem.net_minor), 0),
+        ).where(ReconciliationItem.batch_id == batch_id)
+        """
+        stmt = (
+            select(
+                ReconciliationItem.batch_id,
+                ReconciliationItem.currency,
+                ReconciliationItem.status,
+                func.count().label("item_count"),
+                func.coalesce(func.sum(ReconciliationItem.gross_minor), 0),
+                func.min(ReconciliationItem.next_attempt_at),
+            )
+            .where(ReconciliationItem.status.in_(tuple(statuses)))
+            .group_by(
+                ReconciliationItem.batch_id,
+                ReconciliationItem.currency,
+                ReconciliationItem.status,
+            )
+            .order_by(func.count().desc())
+        )
+        if currency is not None:
+            stmt = stmt.where(ReconciliationItem.currency == currency)
+        if batch_id is not None:
+            stmt = stmt.where(ReconciliationItem.batch_id == batch_id)
+
+        return [
+            BacklogRow(
+                batch_id=row[0],
+                currency=row[1],
+                status=row[2],
+                item_count=int(row[3]),
+                gross_minor=int(row[4] or 0),
+                oldest_next_attempt_at=row[5],
+            )
+            for row in (await session.execute(stmt)).all()
+        ]
+
+    async def list_by_charge(
+        self, session: AsyncSession, charge_id: str
+    ) -> list[ReconciliationItem]:
+        """Every item referencing one charge, across batches.
+
+        Returns a list and not an item on purpose — see the module docstring. The
+        duplicate-finding query in `docs/runbooks/reconciliation.md` starts here.
+        """
         stmt = (
             select(ReconciliationItem)
             .where(ReconciliationItem.charge_id == charge_id)
