@@ -54,6 +54,33 @@ class ExactReferenceMatch(MatchStrategy):
 
     method = "exact_reference"
 
+    def __init__(self, charges: SettlementChargeRepository) -> None:
+        self._charges = charges
+
+    async def match(
+        self, session: AsyncSession, item: ReconciliationItem
+    ) -> MatchOutcome:
+        charge = await self._charges.find_by_processor_reference(
+            session, acquirer=item.acquirer, processor_reference=item.acquirer_reference
+        )
+        if charge is None:
+            return NO_MATCH
+        return MatchOutcome(charge_id=charge.charge_id, method=self.method, confident=True)
+
+
+class NetworkTransactionMatch(MatchStrategy):
+    """Fall back to the card network's own transaction id.
+
+    Worldflow occasionally rewrites its reference for representments but never rewrites
+    the network transaction id, so this catches chargeback and reversal lines that the
+    exact-reference strategy misses.
+    """
+
+    method = "network_transaction"
+
+    def __init__(self, charges: SettlementChargeRepository) -> None:
+        self._charges = charges
+
     async def match(
         self, session: AsyncSession, item: ReconciliationItem
     ) -> MatchOutcome:
@@ -73,6 +100,12 @@ class HeuristicAmountWindowMatch(MatchStrategy):
     Deliberately not confident. Two charges of the same amount for the same merchant on
     the same day are ordinary, and settling the wrong one moves real money.
     """
+
+    method = "heuristic_amount_window"
+
+    def __init__(self, charges: SettlementChargeRepository, clock: Clock) -> None:
+        self._charges = charges
+        self._clock = clock
 
     async def match(
         self, session: AsyncSession, item: ReconciliationItem
@@ -104,6 +137,8 @@ class ManualMatch(MatchStrategy):
     a human chose, and it exists as a strategy so ``reconciliation_item.match_method``
     records how the link was made.
     """
+
+    method = "manual"
 
     def __init__(self, charges: SettlementChargeRepository) -> None:
         self._charges = charges

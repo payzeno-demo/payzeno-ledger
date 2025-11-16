@@ -88,3 +88,37 @@ class ReconciliationService:
             await self._locks.acquire_batch_lock(guard, batch_id)
 
             async with self._sessions.begin() as read_session:
+                items = await self._items.list_for_settlement(
+                    read_session,
+                    batch_id=batch_id,
+                    statuses=RETRYABLE_STATUSES,
+                    limit=max_items,
+                )
+            stats.items_total = len(items)
+
+            # Wall-clock budget for the pass (PR #171). The batch advisory lock is held
+            # by `guard` for as long as this loop runs, and a 5,000-item pass at
+            # 200-900ms per acquirer call held it for over an hour — which starved the
+            # retry drain completely, since every `_claim_item` requests the same key.
+            # A pass that runs over stops cleanly at the next item boundary and the rest
+            # is picked up by the following sweep.
+            budget_seconds = self._settings.reconcile_sweep_wall_budget_seconds
+            started_monotonic = time.monotonic()
+
+            for item in items:
+                if time.monotonic() - started_monotonic > budget_seconds:
+                    stats.items_total = stats.settled + stats.failed
+                    logger.info(
+                        "reconcile_pass_budget_exceeded",
+                        batch_id=batch_id,
+                        run_id=run_id,
+                        budget_seconds=budget_seconds,
+                        processed=stats.settled + stats.failed,
+                        remaining=len(items) - (stats.settled + stats.failed),
+                    )
+                    break
+                try:
+                    async with self._sessions.begin() as session:
+                        await self._process_item(session, item.id)
+                    stats.settled += 1
+                    stats.posted_total_minor += item.gross_minor

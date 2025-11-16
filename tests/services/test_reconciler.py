@@ -59,6 +59,40 @@ class RecordingLocks(AdvisoryLockManager):
 class Settings:
     reconcile_max_items_per_run = 500
     publisher = CollectingPublisher()
+    service = ReconciliationService(
+        sessions=sessions_factory,
+        locks=lock_manager,
+        batches=batches,
+        items=items,
+        runs=runs,
+        poster=poster,
+        publisher=publisher,
+        clock=FrozenClock(NOW),
+        settings=Settings(),
+    )
+    return service, publisher, lock_manager
+
+
+@pytest.fixture
+def batch_of_three(batches, items):
+    batches.seed(make_batch(batch_id="sb_sweep", status="closed"))
+    for n in range(3):
+        items.seed(
+            make_item(
+                item_id=f"ri_sweep_{n}",
+                batch_id="sb_sweep",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status="retryable",
+                next_attempt_at=NOW,
+            )
+        )
+    return "sb_sweep"
+
+
+async def test_reconcile_batch_settles_every_retryable_item(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     run = await service.reconcile_batch(batch_of_three, trigger="scheduled")
 
     assert run.status == "succeeded"
@@ -69,6 +103,17 @@ class Settings:
 
 
 async def test_it_acquires_the_batch_advisory_lock(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert {caller for _, caller in poster.calls} == {"batch_pass"}
+
+
+async def test_process_item_takes_an_id_and_re_reads_the_row(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
     poster = ScriptedPoster(

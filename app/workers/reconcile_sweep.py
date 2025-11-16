@@ -35,3 +35,9 @@ class ReconciliationSweepJob(PeriodicJob):
         service: ReconciliationService,
         settings: Settings,
     ) -> None:
+        self._sessions = sessions
+        self._batches = batches
+        self._service = service
+        self._settings = settings
+
+    @property
