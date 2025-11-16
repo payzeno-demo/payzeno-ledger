@@ -148,3 +148,18 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
 
         Backs the batch detail page and the ops CLI's ``batch`` command. Cheap under
         ``ix_reconciliation_item_batch_status``.
+        """
+        stmt = (
+            select(ReconciliationItem)
+            .where(ReconciliationItem.charge_id == charge_id)
+            .order_by(ReconciliationItem.created_at)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_needing_review(
+        self, session: AsyncSession, *, limit: int = 100
+    ) -> list[ReconciliationItem]:
+        """Items a human has to look at: heuristic matches, variances and orphans.
+
+        None of these ever auto-settle. ``needs_review`` in particular is what the
+        heuristic amount-window match produces — a hint, not an answer.
