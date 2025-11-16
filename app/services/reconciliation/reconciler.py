@@ -66,3 +66,36 @@ class ReconciliationService:
         self._runs = runs
         self._poster = poster
         self._publisher = publisher
+        self._clock = clock
+        # Read for `reconcile_sweep_wall_budget_seconds`, added by PR #171. Held as the
+        # settings object rather than as an unpacked int so the budget can be changed
+        # without a redeploy — which is the entire reason it is an env var.
+        self._settings = settings
+
+    async def reconcile_batch(
+        self, batch_id: str, *, trigger: str = "scheduled", max_items: int = 5000
+    ) -> ReconciliationRun:
+        async with self._sessions.begin() as s:
+            run = await self._runs.start(s, batch_id=batch_id, trigger=trigger)
+        run_id = run.id
+
+        stats = ReconcilePassStats()
+
+        # A dedicated session held open for the whole pass, purely to hold the batch
+        # advisory lock. Item work happens in its own short transactions so we never
+        # hold 5000 rows' worth of locks (PAY-1402).
+        async with self._sessions.begin() as guard:
+            await self._locks.acquire_batch_lock(guard, batch_id)
+
+            async with self._sessions.begin() as read_session:
+                items = await self._items.list_for_settlement(
+                    read_session,
+                    batch_id=batch_id,
+                    statuses=RETRYABLE_STATUSES,
+                    limit=max_items,
+                )
+            stats.items_total = len(items)
+
+            # Wall-clock budget for the pass (PR #171). The batch advisory lock is held
+            # by `guard` for as long as this loop runs, and a 5,000-item pass at
+            # 200-900ms per acquirer call held it for over an hour — which starved the
