@@ -60,8 +60,15 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
         reconciliation_line_type_enum, nullable=False, server_default="sale"
     )
 
+    #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
+    fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    match_method: Mapped[str] = mapped_column(
+        reconciliation_match_method_enum, nullable=False, server_default="unmatched"
+    )
+    matched_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
