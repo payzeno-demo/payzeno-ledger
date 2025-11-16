@@ -111,6 +111,26 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         session: AsyncSession,
         *,
         limit: int,
+        stmt = (
+            select(ReconciliationItem.id)
+            .where(ReconciliationItem.status.in_(("pending", "retryable")))
+            .where(ReconciliationItem.next_attempt_at <= cutoff)
+            .order_by(ReconciliationItem.next_attempt_at)
+            .limit(limit)
+        )
+        return [row[0] for row in (await session.execute(stmt)).all()]
+
+    async def get_batch_id(self, session: AsyncSession, item_id: str) -> str | None:
+        """The parent batch id, or ``None`` when the item does not exist.
+
+        Added by PAY-2043 (PR #171, merged 02:00). ``RetryScheduler._claim_item`` calls
+        this first so it can take ``AdvisoryLockManager.try_acquire_batch_lock`` before
+        the row lock — advisory-then-row, the same order the sweep uses, which is the
+        whole content of the hotfix.
+
+        Returns ``None`` rather than raising: ``_claim_item`` treats a missing item as
+        "not claimable" and returns ``None`` to its caller, which the route maps onto
+        ``409 settlement_locked``. Raising here would turn a lost race into a 500.
         """
         item = await self.get_or_raise(session, item_id)
         item.status = status
@@ -128,3 +148,32 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
 
         Backs the batch detail page and the ops CLI's ``batch`` command. Cheap under
         ``ix_reconciliation_item_batch_status``.
+        """
+        stmt = select(ReconciliationItem.status, func.count()).group_by(
+            ReconciliationItem.status
+        )
+        if batch_id is not None:
+            stmt = stmt.where(ReconciliationItem.batch_id == batch_id)
+        return {row[0]: int(row[1]) for row in (await session.execute(stmt)).all()}
+
+    async def totals_for_batch(self, session: AsyncSession, batch_id: str) -> BatchTotals:
+        """Sum a batch's lines, for ``SettlementService.close_batch``.
+
+        ``expected_total_minor`` on the batch is the sum of the items' ``net_minor`` —
+        what the acquirer says it will pay — and the funding matcher later compares a real
+        bank credit against it within ``FUNDING_MATCH_TOLERANCE_BPS``.
+        """
+        stmt = (
+            select(ReconciliationItem)
+            .where(ReconciliationItem.charge_id == charge_id)
+            .order_by(ReconciliationItem.created_at)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_needing_review(
+        self, session: AsyncSession, *, limit: int = 100
+    ) -> list[ReconciliationItem]:
+        """Items a human has to look at: heuristic matches, variances and orphans.
+
+        None of these ever auto-settle. ``needs_review`` in particular is what the
+        heuristic amount-window match produces — a hint, not an answer.
