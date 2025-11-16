@@ -25,9 +25,52 @@ BPS_DENOMINATOR: Final[int] = 10_000
 #: The currencies Payzeno supports, as a set for O(1) membership checks.
 SUPPORTED_CURRENCIES: Final[frozenset[str]] = frozenset(CURRENCIES)
 
+_ONE: Final[Decimal] = Decimal(1)
+
+
+@dataclass(frozen=True, slots=True)
+class Money:
+    """An amount in minor units plus its currency.
+
+    The Python analogue of ``types.ts``'s ``Money``. Immutable on purpose: a posting line
+    that can be mutated after ``PostingRule.validate`` has run is a posting line that can
+    unbalance a transaction after it was checked.
+    """
+
+    amount_minor: int
+    currency: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.amount_minor, int) or isinstance(self.amount_minor, bool):
+            raise ValidationError(
+                "amount_minor must be an int",
+                details={"amount_minor": repr(self.amount_minor)},
+            )
+        if self.currency not in SUPPORTED_CURRENCIES:
+            raise ValidationError(
+                "unsupported currency",
+                details={"currency": self.currency, "supported": sorted(SUPPORTED_CURRENCIES)},
+            )
+
+    def __str__(self) -> str:
+        return format_money(self)
+
+
+@dataclass(frozen=True, slots=True)
+def zero(currency: str) -> Money:
+    """The additive identity for `currency`."""
+    return Money(amount_minor=0, currency=currency)
+
+
 def is_zero(m: Money) -> bool:
     """True when the amount is exactly zero. Currency is irrelevant to the answer."""
     return m.amount_minor == 0
+
+
+def add_money(a: Money, b: Money) -> Money:
+    """Sum two amounts of the same currency."""
+    assert_same_currency(a, b)
+    return Money(amount_minor=a.amount_minor + b.amount_minor, currency=a.currency)
 
 
 def sub_money(a: Money, b: Money) -> Money:
