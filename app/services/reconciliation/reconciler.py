@@ -111,3 +111,14 @@ class ReconciliationService:
                     logger.info(
                         "reconcile_pass_budget_exceeded",
                         batch_id=batch_id,
+                        run_id=run_id,
+                        budget_seconds=budget_seconds,
+                        processed=stats.settled + stats.failed,
+                        remaining=len(items) - (stats.settled + stats.failed),
+                    )
+                    break
+                try:
+                    async with self._sessions.begin() as session:
+                        await self._process_item(session, item.id)
+                    stats.settled += 1
+                    stats.posted_total_minor += item.gross_minor
