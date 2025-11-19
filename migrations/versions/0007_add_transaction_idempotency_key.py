@@ -15,3 +15,4 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0007"
+branch_labels = None
