@@ -85,3 +85,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         ``.scalars().first()`` and not ``.one_or_none()``: the ``0007`` backfill produced
         genuine duplicate keys for pre-existing auth/capture pairs, and ``one_or_none()``
         would turn a six-year-old data artefact into a 500 on a read path. It also means
+        this method never notices when duplicates appear — which is exactly what happened
+        for twenty-two minutes in month 9.
+
+        This used to be the settlement guard. It is not any more; see
+        :meth:`claim_idempotency_key` and PR #172.
+        """
+        stmt = select(LedgerTransaction).where(LedgerTransaction.idempotency_key == key)
+        return (await session.execute(stmt)).scalars().first()
+
+    async def claim_idempotency_key(
+        self,
