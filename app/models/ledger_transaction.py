@@ -35,7 +35,11 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     """One balanced posting. Immutable once written — corrections are new transactions."""
 
     __tablename__ = "ledger_transaction"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+
     purpose: Mapped[str] = mapped_column(ledger_purpose_enum, nullable=False)
+    currency: Mapped[str] = mapped_column(Currency, nullable=False)
+
     reference_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     reverses_transaction_id: Mapped[str | None] = mapped_column(
@@ -79,6 +83,9 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     transaction_id: Mapped[str] = mapped_column(Text, primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     amount_minor: Mapped[int | None] = mapped_column(nullable=True)
+    detected_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     __table_args__ = (
         Index("ix_settlement_duplicate_audit_key", "idempotency_key"),
         Index(
