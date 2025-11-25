@@ -49,14 +49,52 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
 
     __tablename__ = "merchant_projection"
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    country: Mapped[str | None] = mapped_column(Country, nullable=True)
     platform_fee_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_fee_fixed_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payout_delay_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
     #: A COLUMN, not a feature flag. SettlementPoster nevertheless reads
     #: capture_at_settlement off the CHARGE row, never off this one — see
     #: SettlementCharge below.
     capture_at_settlement: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+    __table_args__ = (
+        Index("ix_merchant_projection_status", "status"),
+        Index("ix_merchant_projection_occurred", "source_occurred_at"),
+    )
+
+    def is_interchange_plus(self) -> bool:
+        """Whether ``apportion_fee`` applies. Blended merchants never touch it."""
+        return self.pricing_model == "interchange_plus"
+
+
+class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
+    """The ledger's copy of ``payzeno_api.charge``, written from ``PaymentAuthorizedPayload``.
+
+    ``reserve_bps``, ``platform_fee_bps``, ``platform_fee_fixed_minor`` and
+    ``capture_at_settlement`` are **denormalised at authorisation time** so a later
+    merchant change cannot retroactively alter an in-flight settlement. That reasoning
+    applies with far higher stakes to ``capture_at_settlement`` than to ``reserve_bps``:
+    flipping the merchant flag mid-flight would otherwise decide whether an already
+    authorised charge gets a second cardholder capture.
+
+    ``SettlementPoster`` therefore reads ``charge.capture_at_settlement`` off **this**
+    row, never off ``merchant_projection``.
+    """
+
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    currency: Mapped[str] = mapped_column(Currency, nullable=False)
     scheme: Mapped[str] = mapped_column(Text, nullable=False)
 
+    def matches_rail(self, method: str) -> bool:
+        """Whether this account's scheme can carry the given payout method."""
+        required = {
+            "standard_ach": "aba",
+            "same_day_ach": "aba",
+            "debit_ach": "aba",
+            "sepa": "iban",
+            "faster_payments": "uk_sort_code",
+        }.get(method)
+        return required is not None and self.scheme == required
