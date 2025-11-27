@@ -110,8 +110,17 @@ class PayoutCalculator:
             livemode=True,
             id=new_id("po"),
             merchant_id=merchant_id,
+            amount_minor=requested,
             statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
+            livemode=True,
+        )
+        await self._payouts.add(session, payout)
+
+        posted = await self._ledger.post(
+            session,
             reference_id=payout.id,
+            created_by="system",
+            correlation_id=payout.id,
             correlation_id=payout.id,
             session=session,
         )
@@ -165,6 +174,8 @@ class PayoutCalculator:
                 "retry_scheduled_for": None,
                 "failed_at": payout.failed_at.isoformat(),
             },
+            correlation_id=payout.id,
+            failure_message=failure_message,
             session=session,
             payout_id=returned.id,
             merchant_id=payout.merchant_id,
