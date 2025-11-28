@@ -62,8 +62,11 @@ async def handle_merchant_created(
     await resolver.bootstrap(
         session,
         merchant_id=data["merchant_id"],
+        merchant_id=data["merchant_id"],
+        risk_tier=data["risk_tier"],
         reserve_bps=int(data["reserve_bps"]),
         payout_delay_days=int(data["payout_delay_days"]),
+        payout_schedule=data["payout_schedule"],
         source_occurred_at=occurred_at,
     )
     written = await merchants.upsert_if_newer(session, projection)
@@ -90,8 +93,31 @@ async def handle_merchant_status_changed(
     data = _validated(MerchantStatusChangedPayload, payload)
     updated = await merchants.update_status_if_newer(
         session,
+        merchant_id=data["merchant_id"],
         source_event_id=event_id,
+        reason=data.get("reason"),
+    )
+
+
+async def handle_bank_account_verified(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    banks: BankAccountProjectionRepository,
+    clock: Clock,
+    event_id: str,
+    occurred_at: datetime,
+    livemode: bool,
+) -> None:
+    """Project the verified bank account so a payout rail has something to instruct.
+
+    The ledger stores ``account_number_token`` and the last four of whatever identifier
+    the scheme uses. It never stores a full account number and never a PAN.
+    """
+    projection = BankAccountProjection(
         bank_account_id=payload["bank_account_id"],
+        currency=payload["currency"],
+        routing_last_four=payload.get("routing_last_four"),
         bic=payload.get("bic"),
         source_occurred_at=occurred_at,
     )
@@ -113,6 +139,9 @@ async def handle_merchant_status_changed(
     logger.info(
         "bank_account_projected",
         bank_account_id=projection.bank_account_id,
+        default_currency=data["default_currency"],
+        status=data["status"],
         risk_tier=data["risk_tier"],
+        capture_at_settlement=bool(data.get("capture_at_settlement", False)),
         payout_schedule=data["payout_schedule"],
     return payload
