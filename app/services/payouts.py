@@ -108,6 +108,8 @@ class PayoutCalculator:
             session,
             merchant_id=merchant_id,
             livemode=True,
+            bank = await self._banks.get_or_raise(session, str(bank_account_id))
+        else:
             id=new_id("po"),
             merchant_id=merchant_id,
             amount_minor=requested,
@@ -118,9 +120,12 @@ class PayoutCalculator:
 
         posted = await self._ledger.post(
             session,
+            currency=currency,
             reference_id=payout.id,
             created_by="system",
+            merchant_id=merchant_id,
             correlation_id=payout.id,
+            payout_id=payout.id,
             correlation_id=payout.id,
             session=session,
         )
@@ -176,8 +181,10 @@ class PayoutCalculator:
             },
             correlation_id=payout.id,
             failure_message=failure_message,
+            reversal_transaction_id=reversal,
             session=session,
             payout_id=returned.id,
+            purpose="payout_reversal",
             merchant_id=payout.merchant_id,
             request_fingerprint=ledger_key("payoutrevfp", payout.id, reason),
         )

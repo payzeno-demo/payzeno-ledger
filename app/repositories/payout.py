@@ -59,6 +59,14 @@ class PayoutRepository(BaseRepository[Payout]):
         the same balance twice. Note what this read cannot see: a payout another
         connection has inserted but not committed. That is why the calculator runs under
         the merchant-currency advisory lock, and why the partial index is unique.
+        limit: int = 500,
+    ) -> list[Payout]:
+        """Scheduled payouts whose ``available_on`` has arrived.
+
+        ``PayoutSchedulerJob`` walks this hourly and hands each one to its rail.
+        ``available_on`` is a banking-calendar date computed by
+        ``BankingCalendar.next_business_day`` — not ledger booking time, which is a
+        different thing and would pay merchants on bank holidays.
         """One merchant's payouts, newest first. Uses ``ix_payout_merchant_created``."""
         stmt = select(Payout).where(Payout.merchant_id == merchant_id)
         if status is not None:
@@ -126,6 +134,24 @@ class PayoutRepository(BaseRepository[Payout]):
         alternative — a terminal ``failed`` payout whose debit of ``merchant_payable`` is
         never reversed — destroys the merchant's balance permanently. Invariant (7) of
         `data-model.md` §6 checks it nightly.
+        """
+        payout = await self.get_or_raise(session, payout_id)
+        payout.status = "failed"
+        payout.failure_code = failure_code
+        payout.failure_message = failure_message
+        payout.reversal_transaction_id = reversal_transaction_id
+        payout.failed_at = at or dt.datetime.now(dt.UTC)
+        await session.flush()
+        return payout
+
+    async def mark_returned(
+        self,
+        session: AsyncSession,
+        payout_id: str,
+        *,
+        failure_code: str,
+        failure_message: str,
+        reversal_transaction_id: str,
         """
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "canceled"
