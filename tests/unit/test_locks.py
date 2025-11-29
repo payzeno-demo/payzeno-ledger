@@ -21,6 +21,21 @@ INT4_MIN = -(2**31)
 INT4_MAX = 2**31 - 1
 
 
+@pytest.fixture
+def locks() -> AdvisoryLockManager:
+    return AdvisoryLockManager()
+
+
+def test_key_fits_int4_for_ten_thousand_random_ids(locks: AdvisoryLockManager) -> None:
+    rng = random.Random(20260730)
+    ns = AdvisoryLockManager.NAMESPACE
+
+    for _ in range(10_000):
+        entity_id = f"sb_{rng.getrandbits(80):020x}"
+        key = locks._key(ns, entity_id)
+        assert INT4_MIN <= key <= INT4_MAX, (entity_id, key)
+
+
 def test_unsigned_read_would_overflow_int4_for_some_ids() -> None:
     """The regression this whole module exists for.
 
@@ -47,5 +62,16 @@ def test_distinct_ids_rarely_collide(locks: AdvisoryLockManager) -> None:
     ns = AdvisoryLockManager.NAMESPACE
     keys = {locks._key(ns, f"sb_{i:012d}") for i in range(20_000)}
     assert len(keys) > 19_900
+
+
+def test_batch_and_item_keys_share_the_derivation(locks: AdvisoryLockManager) -> None:
+    """Batch and item locks are the SAME function on different namespaced values.
+
+    That is exactly why PAY-2041 was possible: `acquire_item_lock` existed and looked like a
+    considered alternative to the batch lock, when in fact the two are different lock
+    DOMAINS and taking one excludes nothing that takes the other.
+    """
+    ns = AdvisoryLockManager.NAMESPACE
+    assert locks._key(ns, "sb_X") != locks._key(ns, "ri_X")
 
 
