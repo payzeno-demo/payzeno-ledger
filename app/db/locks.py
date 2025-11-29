@@ -42,6 +42,17 @@ class AdvisoryLockManager:
 
     NAMESPACE: ClassVar[int] = 0x504159  # "PAY"
 
+    async def acquire_batch_lock(self, session: AsyncSession, batch_id: str) -> None:
+        """Block until this transaction owns the batch lock.
+
+        Used by the sweep's guard transaction, which is allowed to wait: a second sweep
+        arriving mid-pass should queue behind the first, not skip the batch.
+        """
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:ns, :key)"),
+            {"ns": self.NAMESPACE, "key": self._key(self.NAMESPACE, batch_id)},
+        )
+
     async def acquire_item_lock(self, session: AsyncSession, item_id: str) -> None:
         """Block until this transaction owns the item lock.
 
@@ -73,4 +84,12 @@ class AdvisoryLockManager:
                 "key": self._key(self.NAMESPACE, f"{merchant_id}:{currency}"),
             },
         )
+
+    async def try_acquire_item_lock(self, session: AsyncSession, item_id: str) -> bool:
+        """Non-blocking item lock. Used by the ops CLI's manual match command."""
+        result = await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:ns, :key)"),
+            {"ns": self.NAMESPACE, "key": self._key(self.NAMESPACE, item_id)},
+        )
+        return bool(result.scalar_one())
 
