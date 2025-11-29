@@ -47,17 +47,64 @@ class RecordingLocks(AdvisoryLockManager):
         self.merchant_currency: list[str] = []
         self.item_locks: list[str] = []
 
+    async def acquire_item_lock(self, session: Any, item_id: str) -> None:
+        self.item_locks.append(item_id)
+
+
+class StubEntries:
+    """`sum_by_account_and_purpose` — the arc PERF query behind the calculator."""
+
+    async def sum_by_account_and_purpose(
+        self,
+        session: Any,
+        *,
+        merchant_id: str,
+        currency: str,
+        account_type: str,
+        cutoff: datetime,
+        funded_only: bool = True,
+    ) -> tuple[int, int]:
+        self.calls.append(
+            {"merchant_id": merchant_id, "account_type": account_type, "cutoff": cutoff}
+        )
+        return self.credits, self.debits
+
+
+class StubPayouts:
     async def sum_in_flight(
         self, session: Any, *, merchant_id: str, currency: str
     ) -> int:
         return self.in_flight
 
+    async def add(self, session: Any, obj: Any) -> Any:
+        self.rows[obj.id] = obj
+        self.added.append(obj)
+        return obj
+
+    def __init__(self, merchant: Any) -> None:
+        self.merchant = merchant
+
     *,
     merchant_status: str = "active",
+    credits: int = 100_000,
     debits: int = 0,
     initiator: StubInitiator | None = None,
 ):
+    entries = StubEntries(credits=credits, debits=debits)
     payouts = StubPayouts(in_flight=in_flight)
+    publisher = CollectingPublisher()
+    available = await calculator.compute_available(object(), "mer_payout", "USD", NOW)
+
+    assert available == Money(amount_minor=4_180, currency="USD")
+
+
+async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
+    """Click the button twice, get paid once.
+
+    Without this the second `create_payout` sees the same balance the first one did.
+    """
+    _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=4_180)
+
     payout = await service.mark_failed(
         object(),
         payout_id,
