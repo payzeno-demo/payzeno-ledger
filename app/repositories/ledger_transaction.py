@@ -96,3 +96,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
 
     async def claim_idempotency_key(
         self,
+        session: AsyncSession,
+        *,
+        key: str,
+        purpose: str,
+        merchant_id: str | None,
+        currency: str,
+        reference_type: str,
+        reference_id: str,
+        created_by: str,
+        livemode: bool,
+        request_fingerprint: str,
