@@ -65,6 +65,7 @@ def _to_lines(req: PostTransactionRequest) -> list[PostingLine]:
     return [
         PostingLine(
             account_type=line.account_type,
+            idempotency_key=body.idempotency_key,
             purpose=body.purpose,
             reference_type=body.reference_type,
             reference_id=body.reference_id,
@@ -104,6 +105,8 @@ async def list_transactions(
     async with sessions.begin() as session:
         page = await repositories.ledger_transactions.list_page(
             session,
+            merchant_id=merchant_id,
+            reference_id=reference_id,
             purpose=purpose,
         )
         return {
@@ -167,6 +170,62 @@ async def reverse_transaction(
             )
         result = await poster.reverse(
             session,
+            original=original,
             reason=body.reason,
+            created_by="admin",
+        )
+        payload = _serialise(result.transaction)
+
+    logger.warning(
+        "transaction_reversed",
+        original_id=transaction_id,
+        reversal_id=payload["id"],
+        reason=body.reason,
+        caller=caller,
+    )
+    return payload
+
+
+@router.post(
+    "/bulk",
+    response_model=BulkPostTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+    summary="Post many transactions in one request",
+)
+async def post_transactions_bulk(
+    body: BulkPostTransactionRequest,
+    sessions: SessionsDep,
+    poster: PosterDep,
+    caller: InternalCaller,
+) -> dict[str, Any]:
+    """Added in month 2 for the initial ledger backfill off the Java service.
+
+    Nothing has called it since month 5 — the backfill finished and arc MIG moved to
+    per-invoice posting. It is excluded from the OpenAPI snapshot and left in place
+    because the one thing worse than an unused route is discovering during a cutover
+    that you deleted the route the cutover needed.
+
+    All-or-nothing: one session, one transaction, one rollback.
+    """
+    posted_ids: list[str] = []
+    async with sessions.begin() as session:
+        for req in body.transactions:
+            result = await poster.post(
+                session,
+                idempotency_key=req.idempotency_key,
+                purpose=req.purpose,
+                merchant_id=req.merchant_id,
+                currency=req.currency,
+                livemode=req.livemode,
+                reference_type=req.reference_type,
+                reference_id=req.reference_id,
+                lines=_to_lines(req),
+                created_by="system",
+                request_fingerprint=fingerprint_of(req),
+                on_conflict="return_existing",
+            )
+            posted_ids.append(result.transaction.id)
+
     logger.info("transactions_bulk_posted", count=len(posted_ids), caller=caller)
     return {"posted": len(posted_ids), "transaction_ids": posted_ids}
