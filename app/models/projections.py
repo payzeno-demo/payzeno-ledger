@@ -50,9 +50,20 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     __tablename__ = "merchant_projection"
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
     country: Mapped[str | None] = mapped_column(Country, nullable=True)
+    default_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
+
+    pricing_model: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="blended"
+    )
     platform_fee_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     platform_fee_fixed_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     payout_delay_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    #: Variance tolerance per settlement item. SettlementPoster compares
+    #: abs(item.variance_minor) against this and raises
+    #: SettlementVarianceExceededError above it.
+    settlement_tolerance_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="100"
+    )
     #: A COLUMN, not a feature flag. SettlementPoster nevertheless reads
     #: capture_at_settlement off the CHARGE row, never off this one — see
     #: SettlementCharge below.
@@ -85,9 +96,35 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
 
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    __table_args__ = (
+        Index("ix_settlement_charge_merchant", "merchant_id"),
+        # Match strategy 2 (NetworkTransactionMatch) drives off this.
+        Index(
+            "uq_settlement_charge_network_txn",
+            "acquirer",
+            "network_transaction_id",
+            unique=True,
+        ),
+        # The PRIMARY reconciliation match key — strategy 1, ExactReferenceMatch.
+        Index(
+            "ix_settlement_charge_processor_reference", "acquirer", "processor_reference"
+        ),
+        # HeuristicAmountWindowMatch scans this: same (merchant, amount, currency) with
+        # authorized_at inside ±48h, and exactly one candidate.
+        Index(
+            "ix_settlement_charge_heuristic",
+            "merchant_id",
+            "amount_minor",
+            "currency",
+            "authorized_at",
+        ),
+    )
+
+    bank_account_id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     scheme: Mapped[str] = mapped_column(Text, nullable=False)
 
+    routing_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
     def matches_rail(self, method: str) -> bool:
         """Whether this account's scheme can carry the given payout method."""
         required = {

@@ -77,6 +77,67 @@ class MerchantProjectionRepository(BaseRepository[MerchantProjection]):
     """
 
     model: ClassVar[type[MerchantProjection]] = MerchantProjection
+    async def update_status_if_newer(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        status: str,
+        source_event_id: str,
+        source_occurred_at: Any,
+        updated_at: Any,
+    ) -> bool:
+        """Status-only update, for ``merchant.status_changed``.
+
+        A partial event must not blank the columns it does not carry, so this cannot go
+        through :meth:`upsert_if_newer` with a half-populated projection — that is how a
+        status change would zero a merchant's ``platform_fee_bps``. Same freshness guard,
+        narrower ``SET``.
+        """
+        stmt = (
+            MerchantProjection.__table__.update()
+            .where(MerchantProjection.merchant_id == merchant_id)
+            .where(MerchantProjection.source_occurred_at < source_occurred_at)
+            .values(
+                status=status,
+                updated_at=updated_at,
+                source_event_id=source_event_id,
+                source_occurred_at=source_occurred_at,
+            )
+            .returning(MerchantProjection.merchant_id)
+        )
+        return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+    async def list_capture_at_settlement(
+        self, session: AsyncSession, *, limit: int = 100
+    ) -> list[MerchantProjection]:
+        """Merchants whose captures this service is holding.
+
+        Eleven of them in production, all travel or lodging MCCs. The list is short enough
+        to print in an incident channel, and on the night of PAY-2041 somebody did.
+        """
+        stmt = (
+            select(MerchantProjection)
+            .where(MerchantProjection.capture_at_settlement.is_(True))
+            .order_by(MerchantProjection.merchant_id)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+
+class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
+    """The ledger's view of a merchant's payout destinations.
+
+    Fed by ``merchant.bank_account_verified``. Without it ``payout.bank_account_id`` is an
+    id this service cannot resolve: ``bank_account`` is owned by payzeno-api,
+    ``PayoutInitiator.initiate`` has to produce an ACH/SEPA/FPS instruction, and there is
+    no ledger→api route on the payout path. This projection is how the account number
+    token reaches the rail.
+
+    The projection stores a **vault token** and last-four fragments. It never stores an
+    account number and never a PAN (arc PCI).
+    """
+
     async def get_default(
         self,
         session: AsyncSession,
