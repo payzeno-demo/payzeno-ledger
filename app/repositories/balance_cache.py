@@ -80,3 +80,53 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         updated_available = (
             MerchantBalanceCache.available_minor + stmt.excluded.available_minor
         )
+        """
+        stmt = (
+            select(MerchantBalanceCache)
+            .where(MerchantBalanceCache.negative_balance_minor > 0)
+            .order_by(MerchantBalanceCache.negative_balance_minor.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def overwrite(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        currency: str,
+        livemode: bool,
+        available_minor: int,
+        pending_minor: int,
+        reserved_minor: int,
+        disputed_minor: int,
+        computed_at: dt.datetime,
+    ) -> MerchantBalanceCache:
+        """Replace a cached balance with a freshly recomputed one.
+
+        The repair half of the drift check, and the **only** write here that is not a
+        delta. Deliberately not called automatically: an unexplained drift is a symptom,
+        and silently correcting it destroys the evidence. The ops CLI exposes it as
+        ``balance-cache repair`` and the runbook says to capture the before value first.
+        """
+        row = await self.get(
+            session, merchant_id=merchant_id, currency=currency, livemode=livemode
+        )
+        if row is None:
+            row = MerchantBalanceCache(
+                merchant_id=merchant_id,
+                currency=currency,
+                livemode=livemode,
+                computed_at=computed_at,
+                updated_at=computed_at,
+            )
+            session.add(row)
+        row.available_minor = available_minor
+        row.pending_minor = pending_minor
+        row.reserved_minor = reserved_minor
+        row.disputed_minor = disputed_minor
+        row.negative_balance_minor = max(0, -available_minor)
+        row.computed_at = computed_at
+        row.updated_at = computed_at
+        await session.flush()
+        return row
