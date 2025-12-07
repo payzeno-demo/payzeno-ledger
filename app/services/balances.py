@@ -123,6 +123,7 @@ class BalanceService:
                 f"unsupported interval {interval!r}",
                 interval=interval,
                 buckets=bucket_count,
+                max_buckets=MAX_BUCKETS,
             )
 
         logger.info(

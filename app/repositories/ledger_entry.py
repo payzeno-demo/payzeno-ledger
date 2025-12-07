@@ -118,6 +118,53 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         self,
         session: AsyncSession,
         purpose: str | None = None,
+        livemode: bool | None = None,
+        as_of: dt.datetime | None = None,
+    ) -> Any:
+        """Sum entry amounts, either for one account or across a merchant's buckets.
+
+        Two shapes, because two callers grew into one method over PAY-1544 and PAY-1902
+        and nobody has split them since:
+
+        * Give ``account_id`` (optionally with ``purpose`` and ``direction``) and you get
+          a plain ``int`` — the total for that account. This is the payout calculator's
+          question and the one the arc PERF index was added for.
+        * Give ``merchant_id`` + ``currency`` + ``livemode`` and you get a
+          ``dict[str, int]`` keyed by the bucket names in :data:`BUCKET_ACCOUNT_TYPES`
+          (``merchant_payable``, ``merchant_pending``, ``merchant_reserve``,
+          ``merchant_disputed``), signed so a credit-normal account reads positive. This
+          is the balance service's historical read and the audit job's drift check.
+
+        ``as_of`` bounds ``created_at``. Leaving it unset means "now", which for an
+        append-only table is the same as "everything".
+        """
+        if account_id is not None:
+            return await self._sum_for_account(
+                session,
+                account_id=account_id,
+                purpose=purpose,
+                direction=direction,
+                as_of=as_of,
+            )
+        if merchant_id is None or currency is None:
+            raise ValueError("pass account_id, or merchant_id and currency")
+        return await self._sum_buckets(
+            session,
+            merchant_id=merchant_id,
+            currency=currency,
+            livemode=bool(livemode),
+            as_of=as_of,
+        )
+
+    async def _sum_for_account(
+        self,
+        session: AsyncSession,
+        *,
+        account_id: str,
+        purpose: str | None,
+        direction: str | None,
+        as_of: dt.datetime | None,
+    ) -> int:
         """The single-account arm of :meth:`sum_by_account_and_purpose`."""
         stmt = select(func.coalesce(func.sum(LedgerEntry.amount_minor), 0)).where(
             LedgerEntry.account_id == account_id
@@ -189,6 +236,9 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         debit = func.sum(
             case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
         )
+        credit = func.sum(
+            case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
+        )
         rows = tuple(
             TrialBalanceRow(
                 currency=currency,
@@ -217,6 +267,18 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         ) - func.sum(
             case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
         )
+        stmt = (
+            select(LedgerEntry.transaction_id)
+            .where(LedgerEntry.currency == currency)
+            .group_by(LedgerEntry.transaction_id)
+            .having(signed != 0)
+            .limit(limit)
+        )
+        if as_of is not None:
+            stmt = stmt.where(LedgerEntry.created_at <= as_of)
+        return [row[0] for row in (await session.execute(stmt)).all()]
+
+    async def count_for_account(self, session: AsyncSession, account_id: str) -> int:
         """How many legs an account carries. Used by the ops CLI before a freeze."""
         stmt = (
             select(func.count())
