@@ -85,6 +85,39 @@ async def stage_lines(
     async with sessions.begin() as session:
         staged = await invoices.stage_lines(
             session,
+            merchant_id=body.merchant_id,
+            lines=lines,
+        )
+    logger.info(
+        "invoice_lines_staged",
+        merchant_id=body.merchant_id,
+        invoice_public_id=body.invoice_public_id,
+        staged=staged,
+        caller=caller,
+    )
+    return {"staged": staged}
+
+
+@router.get(
+    "/lines",
+    response_model=StagedInvoiceLinesResponse,
+    summary="Read back the staged lines for one invoice",
+)
+async def list_staged_lines(
+    sessions: SessionsDep,
+    invoices: InvoicesDep,
+    merchant_id: Annotated[str, Query(min_length=8)],
+    invoice_public_id: Annotated[str, Query(min_length=1)],
+) -> dict[str, Any]:
+    """Called by ``MigratedInvoiceService#reconcileLines``, the dual-write's checker.
+
+    Both parameters are required. There is no "list all staged lines" — ``invoice_line_staging``
+    is a scratch table (migration ``0022``) with no retention policy, and an unfiltered
+    read of it would return every invoice Payzeno has issued since the dual-write started.
+    """
+    async with sessions.begin() as session:
+        lines = await invoices.list_staged_lines(
+            session,
         )
 
     logger.debug(

@@ -65,8 +65,11 @@ class InvoiceStagingService:
             raise ValidationError(
                 "an invoice stage push carried no lines",
                 merchant_id=merchant_id,
+                line_count=len(lines),
                 invoice_public_id=invoice_public_id,
+                merchant_id=merchant_id,
                 currency=currency,
+                description=str(line.get("description", ""))[:255],
             }
             for row in rows
         ]
