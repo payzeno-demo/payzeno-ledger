@@ -77,9 +77,64 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         ``negative_balance_minor`` is derived, not passed: it is the shortfall when
         ``available_minor`` has gone below zero, and computing it anywhere other than
         beside the number it is derived from is how the two disagree.
+        stmt = pg_insert(MerchantBalanceCache).values(
+            merchant_id=merchant_id,
+            currency=currency,
+            livemode=livemode,
+            available_minor=available_delta,
+            pending_minor=pending_delta,
+            reserved_minor=reserved_delta,
+            disputed_minor=disputed_delta,
+            negative_balance_minor=max(0, -available_delta),
+            last_transaction_id=last_transaction_id,
+            computed_at=stamp,
+            updated_at=stamp,
+        )
         updated_available = (
             MerchantBalanceCache.available_minor + stmt.excluded.available_minor
         )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["merchant_id", "currency", "livemode"],
+            set_={
+                "available_minor": updated_available,
+                "pending_minor": (
+                    MerchantBalanceCache.pending_minor + stmt.excluded.pending_minor
+                ),
+                "reserved_minor": (
+                    MerchantBalanceCache.reserved_minor + stmt.excluded.reserved_minor
+                ),
+                "disputed_minor": (
+                    MerchantBalanceCache.disputed_minor + stmt.excluded.disputed_minor
+                ),
+                "negative_balance_minor": func.greatest(0, -updated_available),
+                "last_transaction_id": stmt.excluded.last_transaction_id,
+                "computed_at": stmt.excluded.computed_at,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        await session.execute(stmt)
+
+    async def list_stale(
+        self,
+        session: AsyncSession,
+        """
+        stmt = (
+            select(MerchantBalanceCache)
+            .order_by(MerchantBalanceCache.computed_at)
+            .limit(limit)
+        )
+        if older_than is not None:
+            stmt = stmt.where(MerchantBalanceCache.computed_at < older_than)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_negative(
+        self, session: AsyncSession, *, limit: int = 200
+    ) -> list[MerchantBalanceCache]:
+        """Merchants who owe Payzeno money, largest shortfall first.
+
+        Uses ``pix_merchant_balance_cache_negative``. ``NegativeBalanceJob`` reads this
+        daily; past a threshold it opens a ``debit_ach`` payout that pulls funds back, and
+        below the threshold it files a risk support task.
         """
         stmt = (
             select(MerchantBalanceCache)
