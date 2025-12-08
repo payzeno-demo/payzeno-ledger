@@ -51,6 +51,7 @@ class Settings(BaseSettings):
         "arn:aws:sns:eu-west-1:000000000000:payzeno-ledger-events"
     )
     sqs_merchants_queue_url: str = ""
+    aws_region: str = "eu-west-1"
     #: Local only — localstack. Must be unset in staging and production so boto3
     #: resolves the real endpoint.
     aws_endpoint_url: str | None = None
@@ -60,6 +61,7 @@ class Settings(BaseSettings):
     worldflow_breaker_window: int = 100
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_acquirer_account: str = "payzeno-uk-1"
+    nordpay_breaker_window: int = 100
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
@@ -76,6 +78,17 @@ class Settings(BaseSettings):
     @field_validator("log_level", mode="before")
     @classmethod
     @classmethod
+    def _blank_is_none(cls, value: object) -> object:
+        """An empty string in the environment means "unset", not "endpoint ''".
+
+        ECS renders an absent SSM parameter as an empty string rather than omitting the
+        variable, and boto3 treats ``endpoint_url=""`` as a hard failure at first call
+        rather than at startup.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @property
     def alembic_database_url(self) -> str:
         """The same DSN with the sync driver, for Alembic.

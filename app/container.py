@@ -217,6 +217,10 @@ class Container:
             settlements=self.settlement_service,
             items=repos.items,
             strategies=self.match_strategies,
+            clock=self.clock,
+        )
+
+        self.reconciliation_service = ReconciliationService(
             poster=self.settlement_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -228,7 +232,12 @@ class Container:
         self.retry_scheduler = RetryScheduler(
             sessions=self.sessions,
             items=repos.items,
+            poster=self.settlement_poster,
+            publisher=self.publisher,
             flags=self.flags,
+            settings=settings,
+        )
+        self.backlog_service = BacklogService(
             items=repos.items,
             batches=repos.batches,
             clock=self.clock,
@@ -267,6 +276,7 @@ class Container:
             fundings=repos.fundings,
             batches=repos.batches,
             publisher=self.publisher,
+            ledger=self.ledger_poster,
             clock=self.clock,
         )
         self.capture_service = DeferredCaptureService(
@@ -317,6 +327,7 @@ class Container:
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
+            sessions=self.sessions,
             clock=self.clock,
             settings=settings,
         )
