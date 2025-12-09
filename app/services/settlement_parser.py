@@ -104,6 +104,7 @@ class WorldflowCsvParser(SettlementFileParser):
             lines.append(
                 ParsedSettlementLine(
                     acquirer_reference=row["acquirer_reference"].strip(),
+                    network_reference=(row.get("network_reference") or "").strip() or None,
                     gross_minor=_int(row.get("gross_minor")),
                     fee_minor=_int(row.get("fee_minor")),
                     interchange_minor=_int(row.get("interchange_minor")),
