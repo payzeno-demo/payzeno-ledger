@@ -169,6 +169,16 @@ async def test_import_file_carries_line_type_through_from_the_file(sessions_fact
 
     await service.import_file("worldflow", PROCESSING_DATE)
 
+    by_reference = {row.acquirer_reference: row for row in items.added}
+    assert by_reference["WF-2001"].line_type == "sale"
+    assert by_reference["WF-2003"].line_type == "scheme_fee"
+
+
+async def test_import_file_closes_the_batch(sessions_factory) -> None:
+    """The sweep only looks at `closed` and `partially_reconciled` batches.
+
+    An import that forgets this step leaves the items sitting there forever, and the only
+    symptom is a merchant asking why they have not been paid.
     batch = await service.import_file("worldflow", PROCESSING_DATE)
 
     assert settlements.closed == [batch.id]
@@ -184,6 +194,31 @@ async def test_import_file_is_a_no_op_for_a_file_already_imported(sessions_facto
 
 
 async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    processor = StubProcessor(payload=b"")
+    service, _, items = _importer(sessions_factory, processor)
+
+    with pytest.raises(ValidationError):
+        await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert items.added == []
+
+
+# --------------------------------------------------------------------------------------
+# parser selection — two formats, one interface, no plan to converge
+# --------------------------------------------------------------------------------------
+
+
+async def test_parser_for_picks_the_acquirer_format() -> None:
+    assert isinstance(parser_for("worldflow"), WorldflowCsvParser)
+    assert isinstance(parser_for("nordpay"), LegacyFixedWidthParser)
+
+
+async def test_parser_for_rejects_an_unknown_acquirer() -> None:
+    with pytest.raises(ValidationError):
+        parser_for("stripe")
+
+
+async def test_worldflow_parser_reads_columns_by_name_not_position() -> None:
     """Worldflow reorders columns between file versions without telling anyone."""
     reordered = (
         b"currency,net_minor,line_type,acquirer_reference,gross_minor,fee_minor,"
