@@ -48,8 +48,15 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     """One acquirer settlement file, and its reconciliation lifecycle."""
 
     __tablename__ = "settlement_batch"
+    entity_name: ClassVar[str] = "settlement_batch"
+
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+    currency: Mapped[str] = mapped_column(Currency, nullable=False)
     processing_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    funded_amount_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     reconciled_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
