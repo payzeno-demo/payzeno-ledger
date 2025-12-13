@@ -82,6 +82,7 @@ class SettlementService:
         batch = SettlementBatch(
             id=new_id("sb"),
             acquirer=acquirer,
+            processing_date=processing_date,
             file_reference=file_reference,
             status="open",
             livemode=livemode,
@@ -184,6 +185,20 @@ class SettlementService:
             "legacy_settlement_import",
             batch_id=batch.id,
             acquirer=acquirer,
+            acquirer=acquirer, processing_date=processing_date
+        )
+        parsed = parser_for(acquirer).parse(raw)
+        if not parsed:
+            logger.warning(
+                "settlement_file_empty",
+                acquirer=acquirer,
+                processing_date=processing_date.isoformat(),
+            )
+
+        file_reference = f"{acquirer}-{processing_date.isoformat()}"
+        currency = parsed[0].currency if parsed else "USD"
+
+        async with self._sessions.begin() as session:
             batch = await self._settlements.open_batch(
                 session,
                 acquirer=acquirer,
