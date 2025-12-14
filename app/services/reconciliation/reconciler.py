@@ -122,3 +122,14 @@ class ReconciliationService:
                         await self._process_item(session, item.id)
                     stats.settled += 1
                     stats.posted_total_minor += item.gross_minor
+                    stats.fee_total_minor += item.fee_minor
+                    stats.net_total_minor += item.net_minor
+                    if item.charge_id is not None:
+                        stats.settled_charge_ids.append(item.charge_id)
+                except RetryableSettlementError as exc:
+                    await self._mark_retryable(item.id, exc.code)
+                    stats.failed += 1
+                except PayzenoLedgerError as exc:
+                    await self._mark_failed(item.id, exc.code)
+                    stats.failed += 1
+                    if exc.code == "orphaned_item":
