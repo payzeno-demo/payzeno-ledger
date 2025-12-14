@@ -26,6 +26,11 @@ def locks() -> AdvisoryLockManager:
     return AdvisoryLockManager()
 
 
+def test_namespace_is_the_pay_ascii_constant() -> None:
+    assert AdvisoryLockManager.NAMESPACE == 0x504159
+    assert AdvisoryLockManager.NAMESPACE.to_bytes(3, "big") == b"PAY"
+
+
 def test_key_fits_int4_for_ten_thousand_random_ids(locks: AdvisoryLockManager) -> None:
     rng = random.Random(20260730)
     ns = AdvisoryLockManager.NAMESPACE
@@ -34,6 +39,18 @@ def test_key_fits_int4_for_ten_thousand_random_ids(locks: AdvisoryLockManager) -
         entity_id = f"sb_{rng.getrandbits(80):020x}"
         key = locks._key(ns, entity_id)
         assert INT4_MIN <= key <= INT4_MAX, (entity_id, key)
+
+
+def test_key_is_deterministic(locks: AdvisoryLockManager) -> None:
+    ns = AdvisoryLockManager.NAMESPACE
+    assert locks._key(ns, "sb_01HQ8ZK4QK") == locks._key(ns, "sb_01HQ8ZK4QK")
+
+
+def test_key_matches_the_documented_blake2b_derivation(locks: AdvisoryLockManager) -> None:
+    ns = AdvisoryLockManager.NAMESPACE
+    digest = hashlib.blake2b(b"sb_01HQ8ZK4QK", digest_size=4).digest()
+    expected = int.from_bytes(digest, "big", signed=True) ^ ns
+    assert locks._key(ns, "sb_01HQ8ZK4QK") == expected
 
 
 def test_unsigned_read_would_overflow_int4_for_some_ids() -> None:
@@ -75,3 +92,7 @@ def test_batch_and_item_keys_share_the_derivation(locks: AdvisoryLockManager) ->
     assert locks._key(ns, "sb_X") != locks._key(ns, "ri_X")
 
 
+def test_merchant_currency_key_is_composed_before_hashing(locks: AdvisoryLockManager) -> None:
+    ns = AdvisoryLockManager.NAMESPACE
+    assert locks._key(ns, "mer_A:USD") != locks._key(ns, "mer_A:EUR")
+    assert locks._key(ns, "mer_A:USD") != locks._key(ns, "mer_AUSD")
