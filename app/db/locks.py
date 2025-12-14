@@ -42,6 +42,7 @@ class AdvisoryLockManager:
 
     NAMESPACE: ClassVar[int] = 0x504159  # "PAY"
 
+    @staticmethod
     async def acquire_batch_lock(self, session: AsyncSession, batch_id: str) -> None:
         """Block until this transaction owns the batch lock.
 
@@ -93,3 +94,26 @@ class AdvisoryLockManager:
         )
         return bool(result.scalar_one())
 
+    async def held_locks(self, session: AsyncSession) -> list[int]:
+        """Every Payzeno advisory lock this connection currently holds.
+
+        Read by ``GET /internal/v1/reconciliation/backlog`` when an operator asks why a
+        batch is not progressing, and by the reconciliation runbook's "who holds the lock"
+        section.
+        """
+        result = await session.execute(
+            text(
+                "SELECT objid FROM pg_locks "
+                "WHERE locktype = 'advisory' AND classid = :ns AND granted"
+            ),
+            {"ns": self.NAMESPACE},
+        )
+        return [int(row[0]) for row in result.all()]
+
+    def batch_key(self, batch_id: str) -> int:
+        """The int4 key a given batch id hashes to.
+
+        Exposed so the runbook can print it: correlating a stuck sweep with a row in
+        ``pg_locks`` otherwise means reimplementing blake2b at 02:00.
+        """
+        return self._key(self.NAMESPACE, batch_id)
