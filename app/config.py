@@ -62,12 +62,20 @@ class Settings(BaseSettings):
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_acquirer_account: str = "payzeno-uk-1"
     nordpay_breaker_window: int = 100
+    #: Wall-clock budget for one sweep pass, added by PR #171. The guard transaction is
+    #: committed and reopened at this cadence so the batch advisory lock is never held
+    #: for more than half a minute; a pass that runs over finishes on the next tick.
+    #: Without it a 5,000-item pass at 200-900ms per acquirer call held the lock for
+    #: over an hour and starved the drain completely.
+    reconcile_sweep_wall_budget_seconds: int = 30
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
     payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"
 
+    # -- periodic jobs that are not always on --------------------------------------
+    ledger_audit_enabled: bool = True
     settlement_import_enabled: bool = True
     funding_match_tolerance_bps: int = 5
 

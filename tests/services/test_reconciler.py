@@ -106,6 +106,22 @@ async def test_it_acquires_the_batch_advisory_lock(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
     poster = ScriptedPoster()
+    service, _, locks = build(sessions_factory, batches, items, runs, poster)
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert locks.batch_locks == [batch_of_three]
+
+
+async def test_it_takes_no_row_locks_at_all(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    """The other half of PAY-2041, asserted as an absence.
+
+    The sweep's item read is a plain SELECT. Against another sweep the batch lock is
+    sufficient. Against a drain holding `FOR UPDATE SKIP LOCKED` on the same row it is
+    nothing at all, because SKIP LOCKED only skips rows somebody else has LOCKED.
+    poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
     await service.reconcile_batch(batch_of_three)
@@ -121,6 +137,27 @@ async def test_process_item_takes_an_id_and_re_reads_the_row(
     )
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
+    before = sessions_factory.begin_count
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert sessions_factory.begin_count > before + 3
+    assert items.rows["ri_sweep_0"].attempt_count == 1
+
+
+async def test_max_items_bounds_the_pass(sessions_factory, batches, items, runs) -> None:
+    batches.seed(make_batch(batch_id="sb_big", status="closed"))
+    for n in range(20):
+        items.seed(
+            make_item(
+                item_id=f"ri_big_{n:02d}",
+                batch_id="sb_big",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status="retryable",
+                next_attempt_at=NOW,
+            )
+        )
     run = await service.reconcile_batch("sb_big", max_items=5)
 
     assert run.items_total == 5

@@ -42,6 +42,12 @@ class AdvisoryLockManager:
 
     NAMESPACE: ClassVar[int] = 0x504159  # "PAY"
 
+    @staticmethod
+    def _key(namespace: int, value: str) -> int:
+        digest = hashlib.blake2b(value.encode("utf-8"), digest_size=4).digest()
+        # signed: pg_advisory_xact_lock takes int4, not uint4
+        return int.from_bytes(digest, "big", signed=True) ^ namespace
+
     async def acquire_batch_lock(self, session: AsyncSession, batch_id: str) -> None:
         """Block until this transaction owns the batch lock.
 
@@ -85,6 +91,25 @@ class AdvisoryLockManager:
             },
         )
 
+    async def try_acquire_batch_lock(self, session: AsyncSession, batch_id: str) -> bool:
+        """Non-blocking batch lock. Returns False when someone else holds it.
+
+        **Non-blocking on purpose.** A sweep can hold the batch lock for minutes across
+        5,000 items; ``pg_advisory_xact_lock`` would park a drain worker on a pooled
+        connection for the whole pass, and 200 of those exhausts ``DATABASE_POOL_SIZE``.
+        Failing fast leaves the item retryable for the next drain, which is what we want
+        — the sweep is settling it anyway.
+
+        The cost is the lock convoy ``mregression`` raised on PR #171 at 02:52: during a
+        sweep, every one of a drain pass's 200 attempts fails and drain throughput for
+        that batch collapses to zero. PAY-2057 is the fix and it is not done.
+        """
+        result = await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:ns, :key)"),
+            {"ns": self.NAMESPACE, "key": self._key(self.NAMESPACE, batch_id)},
+        )
+        return bool(result.scalar_one())
+
     async def try_acquire_item_lock(self, session: AsyncSession, item_id: str) -> bool:
         """Non-blocking item lock. Used by the ops CLI's manual match command."""
         result = await session.execute(
@@ -93,3 +118,26 @@ class AdvisoryLockManager:
         )
         return bool(result.scalar_one())
 
+    async def held_locks(self, session: AsyncSession) -> list[int]:
+        """Every Payzeno advisory lock this connection currently holds.
+
+        Read by ``GET /internal/v1/reconciliation/backlog`` when an operator asks why a
+        batch is not progressing, and by the reconciliation runbook's "who holds the lock"
+        section.
+        """
+        result = await session.execute(
+            text(
+                "SELECT objid FROM pg_locks "
+                "WHERE locktype = 'advisory' AND classid = :ns AND granted"
+            ),
+            {"ns": self.NAMESPACE},
+        )
+        return [int(row[0]) for row in result.all()]
+
+    def batch_key(self, batch_id: str) -> int:
+        """The int4 key a given batch id hashes to.
+
+        Exposed so the runbook can print it: correlating a stuck sweep with a row in
+        ``pg_locks`` otherwise means reimplementing blake2b at 02:00.
+        """
+        return self._key(self.NAMESPACE, batch_id)
