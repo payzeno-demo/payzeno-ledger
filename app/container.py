@@ -182,6 +182,7 @@ class Container:
         # -- L5 services -------------------------------------------------------------
         self.account_resolver = AccountResolver(repos.accounts, self.clock)
         self.ledger_poster = LedgerPoster(
+            entries=repos.entries,
             accounts=repos.accounts,
             balances=repos.balance_cache,
             publisher=self.publisher,
@@ -270,12 +271,17 @@ class Container:
             initiators=self.payout_initiators,
             publisher=self.publisher,
             flags=self.flags,
+            clock=self.clock,
+        )
+        self.ach_puller = AchPayoutPuller(
             banks=repos.banks,
             calendar=self.calendar,
             settings=settings,
+            sessions=self.sessions,
             fundings=repos.fundings,
             batches=repos.batches,
             publisher=self.publisher,
+            sessions=self.sessions,
             ledger=self.ledger_poster,
             clock=self.clock,
         )
@@ -289,6 +295,8 @@ class Container:
             staging=repos.invoice_staging, clock=self.clock
         )
         self.audit_service = LedgerAuditService(
+            sessions=self.sessions,
+            entries=repos.entries,
             clock=self.clock,
         )
         self.adjustment_service = AdjustmentService(

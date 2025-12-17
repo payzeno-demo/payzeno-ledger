@@ -64,4 +64,25 @@ class PeriodicJob(abc.ABC):
             max_instances=1,
             result = await self.run_once()
         except PayzenoLedgerError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            logger.error(
+                "job_crashed", job=self.name, error=str(exc), duration_ms=duration_ms
+            )
+            metrics.increment("JobFailed", job=self.name, code="unhandled")
+            return JobResult(
+                name=self.name,
+                items_processed=0,
+                duration_ms=duration_ms,
+                error=str(exc)[:200],
+            )
+
+        metrics.observe("JobDurationMs", result.duration_ms, job=self.name)
+        metrics.increment("JobCompleted", job=self.name)
+        return result
+
+    def _result(self, started: float, items_processed: int) -> JobResult:
+        """Convenience for subclasses: build a successful result from a start marker."""
+        return JobResult(
+            name=self.name,
+            items_processed=items_processed,
         )
