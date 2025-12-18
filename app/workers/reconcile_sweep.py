@@ -41,3 +41,9 @@ class ReconciliationSweepJob(PeriodicJob):
         self._settings = settings
 
     @property
+    def interval_seconds(self) -> int:
+        return self._settings.reconcile_sweep_interval_seconds
+
+    async def run_once(self) -> JobResult:
+        started = time.monotonic()
+

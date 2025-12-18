@@ -99,6 +99,24 @@ class OutboxDrainJob(PeriodicJob):
                     event_type=event_type,
                     body=body,
                     merchant_id=merchant_id,
+                    correlation_id=correlation_id,
+                )
+            except BusPublishError as exc:
+                async with self._sessions.begin() as session:
+                    await self._outbox.mark_failed(session, row_id, error=exc.code)
+                logger.error(
+                    "outbox_publish_failed",
+                    outbox_id=row_id,
+                    event_type=event_type,
+                    code=exc.code,
+                )
+                metrics.increment("OutboxPublishFailed", event_type=event_type)
+                continue
+
+            async with self._sessions.begin() as session:
+                await self._outbox.mark_published(
+                    session,
+                    row_id,
                     message_id=message_id,
                     published_at=self._clock.now(),
                 )
