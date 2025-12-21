@@ -124,6 +124,12 @@ class BalanceService:
                 interval=interval,
                 buckets=bucket_count,
                 max_buckets=MAX_BUCKETS,
+                interval=interval,
+            )
+
+        async with self._sessions.begin() as session:
+            account = await self._accounts.find_one(
+                session,
             )
 
         logger.info(

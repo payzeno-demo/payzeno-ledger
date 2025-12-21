@@ -36,6 +36,27 @@ router = APIRouter(
 )
 async def get_balance(
     balances: BalanceServiceDep,
+    as_of: Annotated[datetime | None, Query()] = None,
+    livemode: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """``as_of`` omitted means *now*, which is the cached path.
+
+    Supplying it forces a replay over ``ledger_entry`` and is materially slower — the
+    dashboard never does, statement generation always does.
+    """
+    return await balances.get_balance(
+        merchant_id=merchant_id,
+        currency=currency.upper(),
+        livemode=livemode,
+        as_of=as_of,
+    )
+
+
+@router.get(
+    "/{merchant_id}/history",
+    currency: Annotated[str, Query(min_length=3, max_length=3)],
+    from_: Annotated[datetime, Query(alias="from")],
+    to: Annotated[datetime, Query()],
     interval: Annotated[str, Query()] = "day",
     livemode: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
