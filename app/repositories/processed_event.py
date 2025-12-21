@@ -37,6 +37,9 @@ class ProcessedEventRepository(BaseRepository[ProcessedEvent]):
     model: ClassVar[type[ProcessedEvent]] = ProcessedEvent
     not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
 
+    def _default_order(self) -> ColumnElement[Any]:
+        return ProcessedEvent.processed_at
+
     def claim_statement(
         self, *, event_id: str, consumer: str, at: dt.datetime | None = None
     ) -> Insert:
@@ -81,3 +84,51 @@ class ProcessedEventRepository(BaseRepository[ProcessedEvent]):
         )
         return result.scalar_one_or_none() is not None
 
+    async def was_processed(
+        self, session: AsyncSession, *, event_id: str, consumer: str
+    ) -> bool:
+        """Whether this consumer has already handled this event.
+
+        A read, for the ops CLI and for support questions of the form "did we get it".
+        **Not for the handler path** — deciding whether to do work from this is precisely
+        the check-then-act the module docstring rules out. Use :meth:`claim`.
+        """
+        stmt = (
+            select(ProcessedEvent.event_id)
+            .where(ProcessedEvent.event_id == event_id)
+            .where(ProcessedEvent.consumer == consumer)
+        )
+        return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+    async def list_for_event(
+        self, session: AsyncSession, event_id: str
+    ) -> list[ProcessedEvent]:
+        """Which consumers have processed one event.
+
+        Answers "did the projection consumer see it but the posting consumer not", which
+        is the first question support asks when a charge exists in the console and not in
+        the ledger.
+        """
+        stmt = (
+            select(ProcessedEvent)
+            .where(ProcessedEvent.event_id == event_id)
+            .order_by(ProcessedEvent.consumer)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def purge_older_than(
+        self, session: AsyncSession, *, before: dt.datetime
+    ) -> int:
+        """Delete claims older than ``before``. Returns how many rows went.
+
+        This and the outbox reclaim are the only deletes in ``payzeno_ledger``. Soft
+        delete does not exist here and nothing else is ever removed.
+
+        Thirty days is not arbitrary: it has to outlast the longest possible SQS
+        redelivery plus the longest DLQ redrive somebody might run by hand after a bad
+        deploy. Purging at seven days would mean a redriven week-old event is reprocessed
+        as new, and for a ``payment.captured`` that is a second posting.
+        """
+        stmt = delete(ProcessedEvent).where(ProcessedEvent.processed_at < before)
+        result = await session.execute(stmt)
+        return int(result.rowcount or 0)
