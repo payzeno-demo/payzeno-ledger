@@ -71,6 +71,12 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         items_settled: int,
         items_failed: int,
         status: str,
+        limit: int = 20,
+    ) -> list[ReconciliationRun]:
+        """Recent runs, newest first, optionally for one batch.
+
+        Backs ``GET /internal/v1/reconciliation/runs``. Uses
+        ``ix_reconciliation_run_batch_started``.
         stmt = stmt.limit(limit)
         return list((await session.execute(stmt)).scalars().all())
 
