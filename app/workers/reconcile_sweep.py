@@ -47,3 +47,9 @@ class ReconciliationSweepJob(PeriodicJob):
     async def run_once(self) -> JobResult:
         started = time.monotonic()
 
+        async with self._sessions.begin() as session:
+            batches = await self._batches.list_by_status(
+                session, tuple(sorted(RECONCILABLE_BATCH_STATUSES))
+            )
+            batch_ids = [batch.id for batch in batches]
+
