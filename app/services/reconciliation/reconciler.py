@@ -144,3 +144,15 @@ class ReconciliationService:
                 items_failed=stats.failed,
                 status=stats.status,
                 error_summary=None if stats.failed == 0 else f"{stats.failed} items failed",
+            )
+            await self._batches.mark_reconciled(
+                s,
+                batch_id,
+                posted_total_minor=stats.posted_total_minor,
+                fully_settled=stats.failed == 0,
+                at=self._clock.now(),
+            )
+
+        await self._publish_completion(run, stats)
+        metrics.increment(
+            "ReconciliationRunFinished", trigger=trigger, status=stats.status
