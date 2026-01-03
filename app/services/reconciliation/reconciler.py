@@ -167,3 +167,14 @@ class ReconciliationService:
         result = await self._poster.post_settlement(session, item, caller="batch_pass")
 
         item.status = "settled"
+        item.settled_transaction_id = result.transaction_id
+        item.last_attempt_at = self._clock.now()
+
+    async def _mark_retryable(self, item_id: str, code: str) -> None:
+        """Runs in its own transaction.
+
+        The business transaction that failed has already rolled back; anything written
+        inside it is gone, including the attempt counter.
+        """
+        async with self._sessions.begin() as session:
+            item = await self._items.get_or_raise(session, item_id)
