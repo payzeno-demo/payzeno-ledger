@@ -156,3 +156,14 @@ class ReconciliationService:
         await self._publish_completion(run, stats)
         metrics.increment(
             "ReconciliationRunFinished", trigger=trigger, status=stats.status
+        )
+        return run
+
+    async def _process_item(self, session: AsyncSession, item_id: str) -> None:
+        item = await self._items.get_or_raise(session, item_id)
+        if item.status not in RETRYABLE_STATUSES:
+            return  # already handled by another pass
+
+        result = await self._poster.post_settlement(session, item, caller="batch_pass")
+
+        item.status = "settled"
