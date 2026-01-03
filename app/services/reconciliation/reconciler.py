@@ -156,3 +156,25 @@ class ReconciliationService:
         await self._publish_completion(run, stats)
         metrics.increment(
             "ReconciliationRunFinished", trigger=trigger, status=stats.status
+        )
+        return run
+
+    async def _process_item(self, session: AsyncSession, item_id: str) -> None:
+        item = await self._items.get_or_raise(session, item_id)
+        if item.status not in RETRYABLE_STATUSES:
+            return  # already handled by another pass
+
+        result = await self._poster.post_settlement(session, item, caller="batch_pass")
+
+        item.status = "settled"
+        item.settled_transaction_id = result.transaction_id
+        item.last_attempt_at = self._clock.now()
+
+    async def _mark_retryable(self, item_id: str, code: str) -> None:
+        """Runs in its own transaction.
+
+        The business transaction that failed has already rolled back; anything written
+        inside it is gone, including the attempt counter.
+        """
+        async with self._sessions.begin() as session:
+            item = await self._items.get_or_raise(session, item_id)
