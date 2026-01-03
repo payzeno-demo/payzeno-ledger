@@ -91,6 +91,28 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         lock and it must never be used as one. Reading "no active run" and then starting
         work is check-then-act, which ADR 0011 forbids in the money path — take
         ``AdvisoryLockManager.try_acquire_batch_lock`` instead and let Postgres arbitrate.
+        """
+        stmt = (
+            select(ReconciliationRun)
+            .where(ReconciliationRun.batch_id == batch_id)
+            .where(ReconciliationRun.status == "running")
+            .order_by(ReconciliationRun.started_at.desc())
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def list_running_batch_ids(
+        self, session: AsyncSession, batch_ids: list[str] | tuple[str, ...]
+    ) -> list[str]:
+        """Which of ``batch_ids`` currently have a run in flight.
+
+        The backlog service uses this to explain *why* a bucket is not draining. It would
+        also be the input to PAY-2057 — skipping those batches up front instead of
+        discovering the lock one failed retry at a time — which is still open.
+        """
+        if not batch_ids:
+            return []
+        *,
+        batch_id: str | None = None,
         limit: int = 20,
     ) -> list[ReconciliationRun]:
         """Recent runs, newest first, optionally for one batch.
