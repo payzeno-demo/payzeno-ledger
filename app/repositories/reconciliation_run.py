@@ -71,6 +71,26 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         items_settled: int,
         items_failed: int,
         status: str,
+        """
+        run = await self.get_or_raise(session, run_id)
+        run.items_total = items_total
+        run.items_settled = items_settled
+        run.items_failed = items_failed
+        run.status = status
+        run.error_summary = error_summary
+        run.finished_at = at or dt.datetime.now(dt.UTC)
+        await session.flush()
+        return run
+
+    async def find_active(
+        self, session: AsyncSession, *, batch_id: str
+    ) -> ReconciliationRun | None:
+        """The ``running`` run for a batch, if there is one.
+
+        Uses ``pix_reconciliation_run_active``. Note what this is **not**: it is not a
+        lock and it must never be used as one. Reading "no active run" and then starting
+        work is check-then-act, which ADR 0011 forbids in the money path — take
+        ``AdvisoryLockManager.try_acquire_batch_lock`` instead and let Postgres arbitrate.
         limit: int = 20,
     ) -> list[ReconciliationRun]:
         """Recent runs, newest first, optionally for one batch.
