@@ -137,6 +137,16 @@ async def test_process_item_takes_an_id_and_re_reads_the_row(
     )
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
+    run = await service.reconcile_batch(batch_of_three)
+
+    assert items.rows["ri_sweep_0"].status == "failed"
+    assert items.rows["ri_sweep_0"].last_error_code == "orphaned_item"
+    assert run.items_failed == 1
+
+
+async def test_mark_retryable_uses_its_own_session(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     before = sessions_factory.begin_count
 
     await service.reconcile_batch(batch_of_three)
@@ -209,3 +219,7 @@ async def test_only_retryable_statuses_are_picked_up(
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
+    run = await service.reconcile_batch("sb_mixed")
+
+    assert run.items_total == len(RETRYABLE_STATUSES)
+    assert {item_id for item_id, _ in poster.calls} == {"ri_pending", "ri_retryable"}
