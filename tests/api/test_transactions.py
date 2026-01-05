@@ -129,6 +129,12 @@ class StubTransactions:
         self.rows = rows or {}
         self.filters: list[dict[str, Any]] = []
 
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        try:
+            return self.rows[entity_id]
+        except KeyError:
+            raise TransactionNotFoundError(entity_id=entity_id) from None
+
     async def list_page(self, session: Any, *, cursor: str | None, limit: int, **filters: Any) -> Page:
         self.filters.append(filters)
         return Page(items=list(self.rows.values()), next_cursor=None, has_more=False)
@@ -136,6 +142,10 @@ class StubTransactions:
 
 class StubEntries:
     """`LedgerEntryRepository` seen from this router: entries for one transaction."""
+
+    def __init__(self, rows: list[Any] | None = None) -> None:
+        self.rows = rows or []
+        self.reads: list[str] = []
 
     async def list_for_transaction(self, session: Any, transaction_id: str) -> list[Any]:
         self.reads.append(transaction_id)
@@ -154,6 +164,30 @@ class StubRepositories:
 
 
 def _body(**kwargs: Any) -> Any:
+    payload = {
+        "idempotency_key": "settle:sb_1:ri_1",
+        "purpose": "settle",
+        "merchant_id": "mer_api",
+        "currency": "USD",
+        "livemode": True,
+        "reference_type": "reconciliation_item",
+        "reference_id": "ri_1",
+        "created_by": "reconciliation",
+        "lines": [
+            {"account_type": "acquirer_receivable", "direction": "debit", "amount_minor": 9_710},
+            {"account_type": "merchant_payable", "direction": "credit", "amount_minor": 9_710},
+        ],
+    }
+    payload.update(kwargs)
+    return type("PostTransactionRequest", (), payload)()
+
+
+# --------------------------------------------------------------------------------------
+# POST /internal/v1/transactions
+# --------------------------------------------------------------------------------------
+
+
+async def test_posting_a_transaction_returns_it(sessions_factory) -> None:
     ledger = StubLedger()
 
     response = Response()
@@ -178,6 +212,7 @@ async def test_a_replay_with_the_same_fingerprint_returns_the_existing_row(
 
     replayed = Response()
 
+    first = await post_transaction(body, Response(), sessions_factory, ledger, CALLER)
     second = await post_transaction(body, replayed, sessions_factory, ledger, CALLER)
 
     assert first["id"] == second["id"]
@@ -226,6 +261,27 @@ async def test_an_unbalanced_body_is_rejected_before_anything_is_written(
 async def test_getting_a_transaction(sessions_factory) -> None:
     transactions = StubTransactions({"txn_1": _transaction()})
 
+    transaction = await get_transaction(
+        sessions_factory, StubRepositories(transactions=transactions), "txn_1"
+    )
+
+    assert transaction["id"] == "txn_1"
+
+
+async def test_getting_an_unknown_transaction_is_a_404(sessions_factory) -> None:
+    transactions = StubTransactions()
+
+    with pytest.raises(TransactionNotFoundError) as excinfo:
+        await get_transaction(
+            sessions_factory, StubRepositories(transactions=transactions), "txn_ghost"
+        )
+
+    assert excinfo.value.http_status == 404
+
+
+async def test_listing_passes_its_filters_through(sessions_factory) -> None:
+    transactions = StubTransactions({"txn_1": _transaction()})
+
     page = await list_transactions(
         sessions_factory,
         StubRepositories(transactions=transactions),
@@ -243,6 +299,11 @@ async def test_getting_a_transaction(sessions_factory) -> None:
 
 
 async def test_reversing_posts_a_compensating_transaction(sessions_factory) -> None:
+    """Never a DELETE. `ledger_entry` is append-only from migration `0004`."""
+    ledger = StubLedger()
+
+    repositories = StubRepositories(transactions=StubTransactions({"txn_1": _transaction()}))
+
     reversal = await reverse_transaction(
         type("ReverseRequest", (), {"reason": "operator_error", "idempotency_key": "rev_1"})(),
         sessions_factory,
@@ -281,6 +342,9 @@ async def test_the_bulk_route_still_works(sessions_factory) -> None:
 
     It is still mounted, so it is still tested. Deleting it needs a conversation with
     whoever wrote the backfill script, and that conversation has not happened.
+    """
+    ledger = StubLedger()
+
     response = await post_transactions_bulk(
         type(
             "BulkRequest",
