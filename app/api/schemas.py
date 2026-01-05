@@ -143,6 +143,29 @@ class AccountListResponse(BaseModel):
     data: list[Account]
 
 
+class ReverseTransactionRequest(BaseModel):
+    """``POST /internal/v1/transactions/{transaction_id}/reverse``.
+
+    The caller supplies the idempotency key: a reversal issued twice because payzeno-api
+    retried its own HTTP call must not produce two reversals.
+    """
+
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=8, max_length=255)
+
+
+class RecordFundingRequest(BaseModel):
+    """``POST /internal/v1/settlement-batches/{batch_id}/funding``.
+
+    Treasury posts this when the bank credit lands. It is the only proof money actually
+    arrived — a closed, fully-reconciled batch is still unfunded until this fires.
+    """
+
+    bank_reference: str = Field(min_length=1, max_length=255)
+    amount_minor: int
+    value_date: date
+
+
 class MarkPayoutPaidRequest(BaseModel):
     paid_at: datetime
     bank_reference: str = Field(min_length=1, max_length=255)
@@ -186,5 +209,10 @@ class LegacySettlementRecord(BaseModel):
     merchant_id: str | None = None
     charge_id: str | None = None
     posted_at: datetime | None = None
+
+
+class SettlementImportResponse(BaseModel):
+    batch_id: str
+    item_count: int
 
 
