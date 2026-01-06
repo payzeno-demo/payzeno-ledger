@@ -65,6 +65,7 @@ def _to_lines(req: PostTransactionRequest) -> list[PostingLine]:
     return [
         PostingLine(
             account_type=line.account_type,
+            direction=line.direction,
             amount_minor=line.amount_minor,
         )
         for line in req.lines
@@ -131,9 +132,12 @@ async def post_transaction(
             session,
             idempotency_key=body.idempotency_key,
             purpose=body.purpose,
+            merchant_id=body.merchant_id,
             currency=body.currency,
+            livemode=body.livemode,
             reference_type=body.reference_type,
             reference_id=body.reference_id,
+            lines=_to_lines(body),
             created_by="system" if caller == "payzeno-api" else "admin",
             request_fingerprint=fingerprint_of(body),
             on_conflict="raise",
@@ -172,8 +176,10 @@ async def list_transactions(
     async with sessions.begin() as session:
         page = await repositories.ledger_transactions.list_page(
             session,
+            cursor=cursor,
             limit=limit,
             merchant_id=merchant_id,
+            reference_type=reference_type,
             reference_id=reference_id,
             purpose=purpose,
         )
