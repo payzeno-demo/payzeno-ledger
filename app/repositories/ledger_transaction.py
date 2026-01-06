@@ -107,3 +107,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         created_by: str,
         livemode: bool,
         request_fingerprint: str,
+    ) -> IdempotencyClaim:
+        """Atomically claim ``key``, inserting the transaction row if it is free.
+
+        One statement, in the caller's transaction:
+
+        ``INSERT INTO ledger_transaction (...) VALUES (...) ON CONFLICT (idempotency_key)
+        DO NOTHING RETURNING id``
+
+        A returned row means this caller inserted it and owns the posting. No returned row
+        means the unique index rejected the insert, so somebody else owns it — and because
+        the conflict is decided by the index rather than by a prior SELECT, there is no

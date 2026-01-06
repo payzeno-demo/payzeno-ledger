@@ -65,10 +65,81 @@ def _to_lines(req: PostTransactionRequest) -> list[PostingLine]:
     return [
         PostingLine(
             account_type=line.account_type,
+            direction=line.direction,
+            amount_minor=line.amount_minor,
+        )
+        for line in req.lines
+    ]
+
+
+def _serialise(transaction: Any, entries: list[Any] | None = None) -> dict[str, Any]:
+    """ORM row → the ``LedgerTransaction`` shape, entries included."""
+    rows = entries if entries is not None else list(getattr(transaction, "entries", []))
+    return {
+        "id": transaction.id,
+        "object": "ledger_transaction",
+        "idempotency_key": transaction.idempotency_key,
+        "request_fingerprint": transaction.request_fingerprint,
+        "purpose": transaction.purpose,
+        "merchant_id": transaction.merchant_id,
+        "currency": transaction.currency,
+        "livemode": transaction.livemode,
+        "reference_type": transaction.reference_type,
+        "reference_id": transaction.reference_id,
+        "reverses_transaction_id": transaction.reverses_transaction_id,
+        "created_by": transaction.created_by,
+        "posted_at": transaction.posted_at,
+        "entries": [
+            {
+                "id": entry.id,
+                "object": "ledger_entry",
+                "transaction_id": entry.transaction_id,
+                "account_id": entry.account_id,
+                "direction": entry.direction,
+                "amount_minor": entry.amount_minor,
+                "currency": entry.currency,
+                "sequence": entry.sequence,
+                "created_at": entry.created_at,
+            }
+            for entry in rows
+        ],
+    }
+
+
+@router.post(
+    "",
+    response_model=LedgerTransaction,
+    status_code=status.HTTP_201_CREATED,
+    summary="Post a balanced double-entry transaction",
+)
+async def post_transaction(
+    body: PostTransactionRequest,
+    response: Response,
+    sessions: SessionsDep,
+    poster: PosterDep,
+    caller: InternalCaller,
+) -> dict[str, Any]:
+    """Idempotent on ``idempotency_key``.
+
+    A repeat with the same fingerprint returns **200** and the existing transaction; a
+    repeat with a different one raises ``DuplicateSettlementError`` from inside
+    ``LedgerPoster.post`` and comes back as ``409 duplicate_settlement`` with
+    ``details.existing_transaction_id``. The status is set on the shared ``Response``
+    rather than declared per-branch because FastAPI fixes ``status_code`` at decoration.
+    """
+    async with sessions.begin() as session:
+        result = await poster.post(
+            session,
             idempotency_key=body.idempotency_key,
             purpose=body.purpose,
+            merchant_id=body.merchant_id,
+            currency=body.currency,
+            livemode=body.livemode,
             reference_type=body.reference_type,
             reference_id=body.reference_id,
+            lines=_to_lines(body),
+            created_by="system" if caller == "payzeno-api" else "admin",
+            request_fingerprint=fingerprint_of(body),
             on_conflict="raise",
         )
         payload = _serialise(result.transaction)
@@ -105,7 +176,10 @@ async def list_transactions(
     async with sessions.begin() as session:
         page = await repositories.ledger_transactions.list_page(
             session,
+            cursor=cursor,
+            limit=limit,
             merchant_id=merchant_id,
+            reference_type=reference_type,
             reference_id=reference_id,
             purpose=purpose,
         )
@@ -172,6 +246,7 @@ async def reverse_transaction(
             session,
             original=original,
             reason=body.reason,
+            idempotency_key=body.idempotency_key,
             created_by="admin",
         )
         payload = _serialise(result.transaction)
