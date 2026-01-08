@@ -62,9 +62,11 @@ async def handle_merchant_created(
     await resolver.bootstrap(
         session,
         merchant_id=data["merchant_id"],
+        currency=data["default_currency"],
         merchant_id=data["merchant_id"],
         risk_tier=data["risk_tier"],
         reserve_bps=int(data["reserve_bps"]),
+        platform_fee_bps=int(data["platform_fee_bps"]),
         payout_delay_days=int(data["payout_delay_days"]),
         payout_schedule=data["payout_schedule"],
         source_occurred_at=occurred_at,
@@ -94,7 +96,10 @@ async def handle_merchant_status_changed(
     updated = await merchants.update_status_if_newer(
         session,
         merchant_id=data["merchant_id"],
+        status=data["status"],
         source_event_id=event_id,
+        source_occurred_at=occurred_at,
+        previous_status=data.get("previous_status"),
         reason=data.get("reason"),
     )
 
@@ -117,7 +122,9 @@ async def handle_bank_account_verified(
     projection = BankAccountProjection(
         bank_account_id=payload["bank_account_id"],
         currency=payload["currency"],
+        country=payload["country"],
         routing_last_four=payload.get("routing_last_four"),
+        iban_last_four=payload.get("iban_last_four"),
         bic=payload.get("bic"),
         source_occurred_at=occurred_at,
     )
@@ -142,6 +149,9 @@ async def handle_bank_account_verified(
         default_currency=data["default_currency"],
         status=data["status"],
         risk_tier=data["risk_tier"],
+        payout_delay_days=int(data.get("payout_delay_days", 2)),
+        settlement_tolerance_minor=int(data.get("settlement_tolerance_minor", 100)),
         capture_at_settlement=bool(data.get("capture_at_settlement", False)),
         payout_schedule=data["payout_schedule"],
+        updated_at=now,
     return payload

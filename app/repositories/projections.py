@@ -77,6 +77,8 @@ class MerchantProjectionRepository(BaseRepository[MerchantProjection]):
     """
 
     model: ClassVar[type[MerchantProjection]] = MerchantProjection
+    not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
+
     async def update_status_if_newer(
         self,
         session: AsyncSession,
@@ -138,6 +140,29 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
     account number and never a PAN (arc PCI).
     """
 
+    async def upsert_if_newer(
+        self, session: AsyncSession, projection: BankAccountProjection
+    ) -> bool:
+        """Apply the projection unless a later event already wrote this row."""
+        values = {column: getattr(projection, column) for column in _BANK_COLUMNS}
+        values["bank_account_id"] = projection.bank_account_id
+        values["source_event_id"] = projection.source_event_id
+        values["source_occurred_at"] = projection.source_occurred_at
+
+        stmt = pg_insert(BankAccountProjection).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["bank_account_id"],
+            set_={
+                **{c: getattr(stmt.excluded, c) for c in _BANK_COLUMNS},
+                "source_event_id": stmt.excluded.source_event_id,
+                "source_occurred_at": stmt.excluded.source_occurred_at,
+            },
+            where=BankAccountProjection.source_occurred_at
+            < stmt.excluded.source_occurred_at,
+        ).returning(BankAccountProjection.bank_account_id)
+
+        return (await session.execute(stmt)).scalar_one_or_none() is not None
+
     async def get_default(
         self,
         session: AsyncSession,
@@ -175,6 +200,27 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
                 currency=currency,
             )
         return found
+
+    async def list_for_merchant(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        currency: str | None = None,
+        default_only: bool = False,
+    ) -> list[BankAccountProjection]:
+        """Every projected account for a merchant, defaults first."""
+        stmt = select(BankAccountProjection).where(
+            BankAccountProjection.merchant_id == merchant_id
+        )
+        if currency is not None:
+            stmt = stmt.where(BankAccountProjection.currency == currency)
+        if default_only:
+            stmt = stmt.where(BankAccountProjection.is_default.is_(True))
+        stmt = stmt.order_by(
+            BankAccountProjection.is_default.desc(), BankAccountProjection.currency
+        )
+        return list((await session.execute(stmt)).scalars().all())
 
     async def clear_other_defaults(
         self,
