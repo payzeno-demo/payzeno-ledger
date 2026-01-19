@@ -37,9 +37,15 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     __tablename__ = "ledger_transaction"
     id: Mapped[str] = mapped_column(Text, primary_key=True)
 
+    #: Deterministic, derived from the business fact — never from an attempt counter, a
+    #: clock or a random value. `app/domain/idempotency.py::ledger_key` builds it.
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+
     purpose: Mapped[str] = mapped_column(ledger_purpose_enum, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
 
+    #: Polymorphic pointer at the API-side object this posting is about.
+    reference_type: Mapped[str] = mapped_column(ledger_reference_type_enum, nullable=False)
     reference_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     reverses_transaction_id: Mapped[str | None] = mapped_column(
@@ -95,3 +101,6 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
         ),
     )
 
+    def is_reversed(self) -> bool:
+        """Whether the compensating transaction has been posted."""
+        return self.reversed_transaction_id is not None
