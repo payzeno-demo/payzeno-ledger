@@ -128,3 +128,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         with a different body. ``POST /internal/v1/transactions`` turns that into
         ``409 duplicate_settlement``; an identical body replays 200.
         """
+        transaction_id = new_id("txn")
+        stmt = (
+            pg_insert(LedgerTransaction)
+            .values(
+                id=transaction_id,
+                idempotency_key=key,
+                request_fingerprint=request_fingerprint,
+                purpose=purpose,
+                merchant_id=merchant_id,
+                currency=currency,
+                livemode=livemode,
