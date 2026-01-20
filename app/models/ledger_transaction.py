@@ -35,6 +35,8 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     """One balanced posting. Immutable once written — corrections are new transactions."""
 
     __tablename__ = "ledger_transaction"
+    entity_name: ClassVar[str] = "ledger_transaction"
+
     id: Mapped[str] = mapped_column(Text, primary_key=True)
 
     #: Deterministic, derived from the business fact — never from an attempt counter, a
@@ -84,10 +86,12 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
         ),
     )
 
+    __tablename__ = "settlement_duplicate_audit"
     entity_name: ClassVar[str] = "settlement_duplicate_audit"
 
     transaction_id: Mapped[str] = mapped_column(Text, primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     amount_minor: Mapped[int | None] = mapped_column(nullable=True)
     detected_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
