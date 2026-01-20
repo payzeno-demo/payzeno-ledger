@@ -139,3 +139,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
                 merchant_id=merchant_id,
                 currency=currency,
                 livemode=livemode,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                created_by=created_by,
+            )
+            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+            .returning(LedgerTransaction.id)
+        )
+        inserted = (await session.execute(stmt)).scalar_one_or_none()
+        if inserted is not None:
+            return IdempotencyClaim(transaction_id=inserted, created=True)
+
