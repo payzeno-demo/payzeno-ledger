@@ -86,6 +86,33 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
         ),
     )
 
+    def is_reversal(self) -> bool:
+        """True when this transaction compensates another one."""
+        return self.reverses_transaction_id is not None
+
+    def scope_key(self) -> str:
+        """The middle segment of the idempotency key — batch id, charge id, payout id.
+
+        The runbook's duplicate-finding query groups on this to answer "which batch did
+        the duplicates come from" without joining ``reconciliation_item``.
+        """
+        parts = self.idempotency_key.split(":")
+        return parts[1] if len(parts) >= 2 else ""
+
+
+class SettlementDuplicateAudit(Base):
+    """Quarantine table for duplicate settlements — migration ``0019``, PR #172.
+
+    Migration ``0020`` cannot create a unique index while duplicates exist, so it first
+    copies every transaction whose ``posted_at`` is later than the earliest one sharing
+    its ``idempotency_key`` into this table, then calls
+    ``reverse_duplicate_transactions()`` to post compensating entries for them — never a
+    ``DELETE``, because ``ledger_entry`` is append-only.
+
+    The 1,847 rows from the night of PAY-2041 are still in here. They are what the
+    postmortem's blast-radius numbers are counted from.
+    """
+
     __tablename__ = "settlement_duplicate_audit"
     entity_name: ClassVar[str] = "settlement_duplicate_audit"
 
@@ -96,6 +123,9 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     detected_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    #: Null until `reverse_duplicate_transactions()` has posted the compensating entry.
+    reversed_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     __table_args__ = (
         Index("ix_settlement_duplicate_audit_key", "idempotency_key"),
         Index(
