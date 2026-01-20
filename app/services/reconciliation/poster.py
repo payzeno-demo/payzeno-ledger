@@ -106,6 +106,8 @@ class SettlementPoster:
             raise OrphanedItemError(
                 f"reconciliation item {item.id} has no matched charge",
                 item_id=item.id,
+                livemode=item.livemode,
                 scheme_fee_minor=item.scheme_fee_minor,
+                code=code,
             )
         return exc

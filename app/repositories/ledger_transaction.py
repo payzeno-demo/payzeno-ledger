@@ -118,3 +118,35 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         A returned row means this caller inserted it and owns the posting. No returned row
         means the unique index rejected the insert, so somebody else owns it — and because
         the conflict is decided by the index rather than by a prior SELECT, there is no
+        window between the check and the act for a second connection to slip through.
+
+        The claim **is** the insert. It does not write a placeholder for ``LedgerPoster``
+        to overwrite: two writes would put the row on disk twice and reintroduce exactly
+        the shape this method exists to remove.
+
+        ``fingerprint_matches`` is False when the key was already claimed by a request
+        with a different body. ``POST /internal/v1/transactions`` turns that into
+        ``409 duplicate_settlement``; an identical body replays 200.
+        """
+        transaction_id = new_id("txn")
+        stmt = (
+            pg_insert(LedgerTransaction)
+            .values(
+                id=transaction_id,
+                idempotency_key=key,
+                request_fingerprint=request_fingerprint,
+                purpose=purpose,
+                merchant_id=merchant_id,
+                currency=currency,
+                livemode=livemode,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                created_by=created_by,
+            )
+            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+            .returning(LedgerTransaction.id)
+        )
+        inserted = (await session.execute(stmt)).scalar_one_or_none()
+        if inserted is not None:
+            return IdempotencyClaim(transaction_id=inserted, created=True)
+
