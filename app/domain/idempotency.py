@@ -52,6 +52,19 @@ _KEY_SHAPES: Final[dict[str, tuple[str, str | None]]] = {
 _ACQUIRER_CAPTURE_SHAPE: Final[tuple[str, str]] = ("sb", "ch")
 
 
+def acquirer_capture_key(batch_id: str, charge_id: str) -> str:
+    """The idempotency key sent to the acquirer on ``capture_deferred``.
+
+    Both Worldflow and Nordpay honour it (`api-surface.md` §15). It is deliberately the
+    same shape as a ledger key so the two can be correlated in a postmortem, but it is
+    *not* a ledger key — nothing stores it in ``ledger_transaction.idempotency_key``.
+    """
+    scope_prefix, subject_prefix = _ACQUIRER_CAPTURE_SHAPE
+    ids.require(batch_id, scope_prefix)
+    ids.require(charge_id, subject_prefix)
+    return f"capture:{batch_id}:{charge_id}"
+
+
 def parse_key(key: str) -> tuple[str, str, str]:
     """Split a ledger key back into ``(purpose, scope_id, subject_id)``.
 
@@ -107,3 +120,11 @@ def fingerprint_of(item: Any) -> str:
     )
 
 
+def request_fingerprint(method: str, path: str, body: Any) -> str:
+    """Public-API style fingerprint: ``sha256(method || '\\n' || path || '\\n' || body)``.
+
+    Mirrors payzeno-api's ``IdempotencyInterceptor`` so the two services agree on what
+    "the same request" means when a caller replays ``POST /internal/v1/transactions``.
+    """
+    material = f"{method.upper()}\n{path}\n{canonical_json(body)}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
