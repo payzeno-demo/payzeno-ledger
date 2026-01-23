@@ -26,6 +26,23 @@ from app.errors import NegativeAmountError, UnbalancedTransactionError, Validati
 Direction = Literal["debit", "credit"]
 
 
+class PostingLine:
+    """One leg of a balanced transaction.
+
+    ``account_type`` is resolved to a concrete ``account.id`` by
+    ``AccountResolver.get_or_create`` at posting time — rules never see account ids,
+    which is what keeps them pure and testable without a session.
+    """
+
+    account_type: AccountType
+    direction: Direction
+    amount_minor: int
+
+    def signed_minor(self) -> int:
+        """Debit-positive signed amount. Used only by :meth:`PostingRule.validate`."""
+        return self.amount_minor if self.direction == "debit" else -self.amount_minor
+
+
 def credit(account_type: AccountType, amount_minor: int) -> PostingLine:
     """Shorthand used by every rule body."""
     return PostingLine(account_type=account_type, direction="credit", amount_minor=amount_minor)
