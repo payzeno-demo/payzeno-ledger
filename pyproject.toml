@@ -1,6 +1,7 @@
 [project]
 name = "payzeno-ledger"
 version = "1.0.0"
+description = "Payzeno double-entry ledger — settlement import, reconciliation, payouts."
 requires-python = ">=3.12,<3.13"
 license = { text = "UNLICENSED" }
 authors = [{ name = "Core Payments", email = "core-payments@payzeno.com" }]
@@ -17,7 +18,18 @@ package = true
 
 line-length = 100
 target-version = "py312"
+extend-exclude = ["migrations/versions"]   # generated headers, revision ids, autogen noise
+
 [tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle / pyflakes
+  "I",                # isort
+  "UP",               # pyupgrade
+  "B",                # bugbear
+  "ASYNC",            # blocking calls in async defs — this service is async top to bottom
+  "S",                # bandit
+  "C4", "SIM", "RET", "ARG", "TID", "RUF",
+]
 ignore = [
   "S101",   # assert — used everywhere in tests
   "B008",   # FastAPI Depends() in defaults is the framework idiom
@@ -32,7 +44,14 @@ ban-relative-imports = "all"                 # ADR 0002 — the layering is only
 
 known-third-party = ["payzeno_contracts"]
 
+# ---------------------------------------------------------------------------
+# mypy — strict on app/, lenient on tests and migrations.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
 plugins = ["pydantic.mypy"]
+show_error_codes = true
 exclude = "^migrations/versions/"
 
 [[tool.mypy.overrides]]
@@ -46,7 +65,9 @@ ignore_missing_imports = true
 # pytest
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
+minversion = "8.0"
 testpaths = ["tests"]
+asyncio_mode = "strict"
 addopts = "-ra --strict-markers --strict-config"
 markers = [
   "integration: needs the pg_engine fixture (real Postgres via testcontainers)",
