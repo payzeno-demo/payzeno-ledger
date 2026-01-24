@@ -150,3 +150,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         if inserted is not None:
             return IdempotencyClaim(transaction_id=inserted, created=True)
 
+        # Lost the race (or replayed our own request). The winner is committed or at
+        # least written by a transaction we are now blocked behind, so this read is safe.
+        existing = await self.find_by_idempotency_key(session, key)
+        if existing is None:  # pragma: no cover - only reachable if the row vanished
+            raise TransactionNotFoundError(
+                "idempotency key was claimed and then disappeared",
+                idempotency_key=key,
+            )
+        return IdempotencyClaim(
+            transaction_id=existing.id,
+            created=False,
