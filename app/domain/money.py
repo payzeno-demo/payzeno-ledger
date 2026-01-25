@@ -57,6 +57,27 @@ class Money:
 
 
 @dataclass(frozen=True, slots=True)
+class FeeBreakdown:
+    """The result of apportioning one fee across several components.
+
+    ``sum(components.values()) == total`` always holds — that is the whole point of the
+    largest-remainder rule in :func:`app.domain.fees.apportion_fee`. ``remainder_minor``
+    records how many minor units the rounding had to move, for the audit trail.
+    """
+
+    total: Money
+    components: dict[str, Money]
+    remainder_minor: int
+
+
+def exponent_for(currency: str) -> int:
+    """Minor-unit exponent for `currency`. JPY is 0 — never assume 2."""
+    try:
+        return int(CURRENCY_EXPONENT[currency])
+    except KeyError as exc:  # pragma: no cover - guarded by Money.__post_init__
+        raise ValidationError("unsupported currency", details={"currency": currency}) from exc
+
+
 def zero(currency: str) -> Money:
     """The additive identity for `currency`."""
     return Money(amount_minor=0, currency=currency)
@@ -65,6 +86,15 @@ def zero(currency: str) -> Money:
 def is_zero(m: Money) -> bool:
     """True when the amount is exactly zero. Currency is irrelevant to the answer."""
     return m.amount_minor == 0
+
+
+def assert_same_currency(a: Money, b: Money) -> None:
+    """Raise :class:`CurrencyMismatchError` unless both operands share a currency."""
+    if a.currency != b.currency:
+        raise CurrencyMismatchError(
+            "cannot combine amounts in different currencies",
+            details={"left": a.currency, "right": b.currency},
+        )
 
 
 def add_money(a: Money, b: Money) -> Money:
@@ -90,6 +120,43 @@ def apply_bps(m: Money, bps: int) -> Money:
     raw = (Decimal(m.amount_minor) * Decimal(bps)) / Decimal(BPS_DENOMINATOR)
     quantised = int(raw.quantize(_ONE, rounding=ROUND_HALF_UP))
     return Money(amount_minor=quantised, currency=m.currency)
+
+
+def to_minor(amount: str, currency: str) -> int:
+    """Parse a decimal string (``"12.34"``) into minor units for `currency`.
+
+    The settlement parsers call this on every acquirer line, which is why it takes a
+    ``str`` and not a float — ``float("0.29") * 100`` is ``28.999999999999996``.
+    """
+    exponent = exponent_for(currency)
+    try:
+        value = Decimal(amount.strip())
+    except (ArithmeticError, ValueError) as exc:
+        raise ValidationError(
+            "amount is not a decimal", details={"amount": amount, "currency": currency}
+        ) from exc
+    scaled = value.scaleb(exponent)
+    return int(scaled.quantize(_ONE, rounding=ROUND_HALF_UP))
+
+
+def format_money(m: Money) -> str:
+    """Human-readable form used in ops CLI tables and log context: ``"12.34 USD"``."""
+    return f"{from_minor(m.amount_minor, m.currency)} {m.currency}"
+
+
+def split_evenly(m: Money, parts: int) -> list[Money]:
+    """Split `m` into `parts` amounts that sum exactly to `m`.
+
+    The first ``remainder`` slices carry one extra minor unit. Used by the reserve
+    release schedule when a hold is released over several banking days.
+    """
+    if parts <= 0:
+        raise ValidationError("parts must be positive", details={"parts": parts})
+    base, remainder = divmod(m.amount_minor, parts)
+    return [
+        Money(amount_minor=base + (1 if i < remainder else 0), currency=m.currency)
+        for i in range(parts)
+    ]
 
 
 def allocate_remainder(total: Money, weights: list[int]) -> list[Money]:
