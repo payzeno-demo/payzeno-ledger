@@ -108,6 +108,8 @@ class SettlementPoster:
                 item_id=item.id,
                 livemode=item.livemode,
                 scheme_fee_minor=item.scheme_fee_minor,
+                acquirer=item.acquirer,
                 code=code,
+                item_id=item.id,
             )
         return exc

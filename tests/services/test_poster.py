@@ -59,9 +59,23 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
     metrics = CountingMetrics()
     poster = SettlementPoster(
         transactions=transactions,
+        ledger=ledger,
         item_id="ri_post",
+        merchant_id="mer_post",
         gross_minor=10_000,
         merchant_id="mer_post",
+        item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
+    )
+
+    poster, processor, _, _ = build(*wired)
+    await poster.post_settlement(object(), line, caller="batch_pass")
+
+    assert processor.capture_calls == []
+
+
+async def test_capture_carries_a_deterministic_idempotency_key(wired, charges) -> None:
+    charges.seed(make_charge_projection(charge_id="ch_key", capture_at_settlement=True))
+    line = make_item(
     )
     poster, _, _, _ = build(*wired)
 
