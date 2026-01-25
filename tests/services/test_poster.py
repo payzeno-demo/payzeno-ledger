@@ -64,6 +64,80 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
         merchant_id="mer_post",
         gross_minor=10_000,
         merchant_id="mer_post",
+        gross_minor=413,
+        net_minor=0,
+    )
+    poster, processor, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), fee_line, caller="batch_pass")
+
+    assert processor.confirm_calls
+
+
+async def test_confirm_settlement_failure_becomes_a_retryable_error(wired, item) -> None:
+    """The 22 minutes of Worldflow 504s, in one assertion.
+
+    Every item confirms its line. Every confirm returned 504. So every item went retryable —
+    4,113 of them across two batches — and the drain had a backlog large enough for three
+    sweeps to land inside it.
+    """
+    processor = RecordingProcessorClient(
+        confirm_raises=ProcessorUnavailableError(code="processor_unavailable")
+    )
+    poster, _, _, _ = build(*wired, processor=processor)
+
+    with pytest.raises(RetryableSettlementError) as excinfo:
+        await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    assert excinfo.value.code == "processor_unavailable"
+    assert excinfo.value.code in RETRYABLE_ERROR_CODES
+
+
+async def test_an_indeterminate_code_is_not_retried_blindly(wired, item) -> None:
+    # PAY-2060. A timeout on a capture is the one state where we do not know whether the
+    # cardholder was charged, so it must not go down the plain retry path.
+    processor = RecordingProcessorClient(
+        item_id="ri_orphan", batch_id="sb_post", charge_id=None, merchant_id="mer_post"
+    )
+    poster, _, _, _ = build(*wired)
+
+    with pytest.raises(OrphanedItemError) as excinfo:
+        await poster.post_settlement(object(), orphan, caller="batch_pass")
+
+    assert not isinstance(excinfo.value, ChargeProjectionNotFoundError)
+    assert excinfo.value.details["item_id"] == "ri_orphan"
+
+
+async def test_variance_beyond_tolerance_posts_nothing(wired, item, ledger) -> None:
+    item.variance_minor = -5_000
+
+    poster, _, publisher, _ = build(*wired)
+
+    with pytest.raises(SettlementVarianceExceededError):
+        await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert ledger.posted == []
+    assert "settlement.item_settled" not in publisher.event_types()
+
+
+async def test_variance_within_tolerance_posts_normally(wired, item) -> None:
+    item.variance_minor = 40  # tolerance is 100 minor units
+
+    poster, _, _, _ = build(*wired)
+    result = await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert result.created is True
+
+
+async def test_capture_deferred_only_for_capture_at_settlement_charges(
+    wired, item, charges
+) -> None:
+    poster, processor, _, _ = build(*wired)
+    await poster.post_settlement(object(), item, caller="batch_pass")
+    assert processor.capture_calls == []
+
+    charges.seed(make_charge_projection(charge_id="ch_deferred", capture_at_settlement=True))
+    deferred = make_item(
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
 
