@@ -222,6 +222,7 @@ class Container:
         )
 
         self.reconciliation_service = ReconciliationService(
+            locks=self.locks,
             poster=self.settlement_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -268,6 +269,7 @@ class Container:
         }
         self.payout_service = PayoutService(
             calculator=self.payout_calculator,
+            calendar=self.calendar,
             initiators=self.payout_initiators,
             publisher=self.publisher,
             flags=self.flags,
@@ -282,6 +284,7 @@ class Container:
             batches=repos.batches,
             publisher=self.publisher,
             sessions=self.sessions,
+            holds=repos.reserves,
             ledger=self.ledger_poster,
             clock=self.clock,
         )
@@ -307,11 +310,13 @@ class Container:
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
+            charges=repos.charges,
             transactions=repos.transactions,
             clock=self.clock,
         )
         self.merchant_event_consumer = MerchantEventConsumer(
             sessions=self.sessions,
+            processed=repos.processed_events,
             sqs_client_factory=sqs_factory,
             settings=settings,
             banks=repos.banks,
@@ -327,6 +332,7 @@ class Container:
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
+            sessions=self.sessions,
             batches=repos.batches,
             clock=self.clock,
             settings=settings,

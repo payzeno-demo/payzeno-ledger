@@ -41,6 +41,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    #: Read the comment in .env.example before lowering this. `reconcile_batch` holds
+    #: three sessions in one pass and `RetryDrainJob` takes a fourth, so the floor is
+    #: 3 x (concurrent sweeps) + drains. Production is 20 across four tasks.
+    database_pool_size: int = 20
     # -- internal auth -------------------------------------------------------------
     #: Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's
     #: PAYZENO_INTERNAL_SECRET. All three must match or nothing talks to us.
@@ -68,6 +72,7 @@ class Settings(BaseSettings):
     #: Without it a 5,000-item pass at 200-900ms per acquirer call held the lock for
     #: over an hour and starved the drain completely.
     reconcile_sweep_wall_budget_seconds: int = 30
+    reconcile_max_items_per_run: int = 500
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
