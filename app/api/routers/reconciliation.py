@@ -110,3 +110,9 @@ def _serialise_run(run: Any) -> dict[str, Any]:
 @router.post(
     "/runs",
     response_model=ReconciliationRun,
+    summary="Fetch one reconciliation run",
+)
+async def get_run(
+    sessions: SessionsDep,
+    repositories: ReposDep,
+    status_code=status.HTTP_202_ACCEPTED,
