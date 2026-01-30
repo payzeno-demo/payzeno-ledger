@@ -61,9 +61,20 @@ class PeriodicJob(abc.ABC):
             self._tick,
             trigger=IntervalTrigger(seconds=interval),
             id=self.name,
+            name=self.name,
             max_instances=1,
+            coalesce=True,
             result = await self.run_once()
         except PayzenoLedgerError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            logger.error(
+                "job_failed", job=self.name, code=exc.code, duration_ms=duration_ms
+            )
+            metrics.increment("JobFailed", job=self.name, code=exc.code)
+            return JobResult(
+                name=self.name, items_processed=0, duration_ms=duration_ms, error=exc.code
+            )
+        except Exception as exc:  # noqa: BLE001 - a job must never kill the scheduler
             duration_ms = int((time.monotonic() - started) * 1000)
             logger.error(
                 "job_crashed", job=self.name, error=str(exc), duration_ms=duration_ms
