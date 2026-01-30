@@ -53,3 +53,10 @@ class ReconciliationSweepJob(PeriodicJob):
             )
             batch_ids = [batch.id for batch in batches]
 
+        processed = 0
+        for batch_id in batch_ids:
+            try:
+                run = await self._service.reconcile_batch(
+                    batch_id,
+                    trigger="scheduled",
+                    max_items=self._settings.reconcile_max_items_per_run,
