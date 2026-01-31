@@ -31,12 +31,26 @@ def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
 
     assert isinstance(breakdown, FeeBreakdown)
     assert set(breakdown.components) == {"interchange", "scheme_fee", "acquirer_markup"}
+    total = sum(m.amount_minor for m in breakdown.components.values())
+    assert total == breakdown.total.amount_minor
+
+
+def test_apportion_fee_puts_the_remainder_on_the_markup_not_on_rounding() -> None:
     components = [
         FeeComponent(name="interchange", bps=100, fixed_minor=0),
         FeeComponent(name="scheme_fee", bps=100, fixed_minor=0),
         FeeComponent(name="acquirer_markup", bps=101, fixed_minor=0),
     ]
 
+    breakdown = apportion_fee(gross, components)
+
+    assert breakdown.remainder_minor == 0
+    assert breakdown.components["acquirer_markup"].amount_minor >= (
+        breakdown.components["interchange"].amount_minor
+    )
+
+
+def test_apportion_fee_with_a_single_component_returns_the_whole_fee() -> None:
     breakdown = apportion_fee(_usd(10_000), [])
     assert breakdown.total.amount_minor == 0
     assert breakdown.components == {}

@@ -26,6 +26,7 @@ from app.errors import NegativeAmountError, UnbalancedTransactionError, Validati
 Direction = Literal["debit", "credit"]
 
 
+@dataclass(frozen=True, slots=True)
 class PostingLine:
     """One leg of a balanced transaction.
 
@@ -41,6 +42,11 @@ class PostingLine:
     def signed_minor(self) -> int:
         """Debit-positive signed amount. Used only by :meth:`PostingRule.validate`."""
         return self.amount_minor if self.direction == "debit" else -self.amount_minor
+
+
+def debit(account_type: AccountType, amount_minor: int) -> PostingLine:
+    """Shorthand used by every rule body."""
+    return PostingLine(account_type=account_type, direction="debit", amount_minor=amount_minor)
 
 
 def credit(account_type: AccountType, amount_minor: int) -> PostingLine:
