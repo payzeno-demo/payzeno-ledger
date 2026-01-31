@@ -64,6 +64,14 @@ class PeriodicJob(abc.ABC):
             name=self.name,
             max_instances=1,
             coalesce=True,
+            replace_existing=True,
+        )
+        logger.info("job_registered", job=self.name, interval_seconds=interval)
+
+    async def _tick(self) -> JobResult:
+        """Wrap :meth:`run_once` so no job can take the scheduler down with it."""
+        started = time.monotonic()
+        try:
             result = await self.run_once()
         except PayzenoLedgerError as exc:
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -96,4 +104,6 @@ class PeriodicJob(abc.ABC):
         return JobResult(
             name=self.name,
             items_processed=items_processed,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error=None,
         )
