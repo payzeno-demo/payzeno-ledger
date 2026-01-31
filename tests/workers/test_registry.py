@@ -68,7 +68,15 @@ class CountingJob(PeriodicJob):
 
     name: ClassVar[str] = "counting"
 
+    def __init__(self, *, interval: int = 30, raises: Exception | None = None) -> None:
+        self._interval = interval
+        self._raises = raises
+        self.runs = 0
+
     @property
+    def interval_seconds(self) -> int:
+        return self._interval
+
     async def run_once(self) -> JobResult:
         self.runs += 1
         if self._raises is not None:
@@ -84,14 +92,59 @@ async def test_periodic_job_is_abstract() -> None:
 
 
 async def test_every_job_declares_a_unique_name() -> None:
+    """The name is APScheduler's job id. Two jobs with one name means one job."""
+    names = [job.name for job in ALL_JOBS]
+
+    assert len(names) == len(set(names)), f"duplicate job name in {names}"
+    assert len(names) == 11
+
+
+async def test_every_job_subclasses_the_base() -> None:
+    for job in ALL_JOBS:
+        assert issubclass(job, PeriodicJob), f"{job.__name__} is not a PeriodicJob"
+
+
+async def test_start_registers_with_the_interval_from_settings() -> None:
     job = CountingJob(interval=900)
     scheduler = RecordingScheduler()
 
     await job.start(scheduler)
 
     assert len(scheduler.jobs) == 1
+    registered = scheduler.jobs[0]
+    assert registered["id"] == "counting"
+    assert registered["max_instances"] == 1
+    assert registered["coalesce"] is True
+
+
+async def test_a_zero_interval_disables_the_job_without_a_redeploy() -> None:
+    """01:44 on the night of PAY-2041, in one assertion.
+
+    `RETRY_DRAIN_INTERVAL_SECONDS=0` is what stopped the bleeding. It only works because
+    the interval is read from `Settings` here rather than baked in at import.
+    """
+    job = CountingJob(interval=0)
+    scheduler = RecordingScheduler()
+
+    await job.start(scheduler)
+
+    assert scheduler.jobs == []
+
+
+async def test_tick_returns_a_result_rather_than_raising() -> None:
     """A job that raises is a job APScheduler eventually stops running."""
     job = CountingJob(raises=RuntimeError("acquirer exploded"))
+
+    result = await job._tick()  # noqa: SLF001 - the wrapper is the unit under test
+
+    assert isinstance(result, JobResult)
+    assert result.error is not None
+    assert "acquirer exploded" in result.error
+    assert result.items_processed == 0
+
+
+async def test_tick_passes_a_successful_result_through() -> None:
+    job = CountingJob()
 
     result = await job._tick()  # noqa: SLF001
 
@@ -112,6 +165,9 @@ async def test_register_jobs_is_the_single_registration_site() -> None:
 async def test_result_helper_reports_a_duration() -> None:
     """`_result` is what every concrete uses to build its success case."""
     import time
+
+    job = CountingJob()
+    started = time.monotonic()
 
     result = job._result(started, 42)  # noqa: SLF001
 
