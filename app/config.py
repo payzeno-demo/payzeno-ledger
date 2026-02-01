@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
+    nordpay_api_key: str = "sandbox_np_0000000000000000"
     nordpay_acquirer_account: str = "payzeno-uk-1"
     nordpay_breaker_window: int = 100
     #: Wall-clock budget for one sweep pass, added by PR #171. The guard transaction is
@@ -76,6 +77,13 @@ class Settings(BaseSettings):
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
+    #: Staged-rollout leftover from PAY-1688. Defaults false and was never widened; on
+    #: the night of PAY-2041 it was true on exactly ONE of four ledger tasks, which is
+    #: why a 4,113-item backlog took twenty-one minutes to drain and why the drain
+    #: overlapped the sweep at all. See docs/postmortems/2041-duplicate-settlement.md.
+    retry_drain_enabled: bool = False
+
+    payout_cutoff_same_day_ach_utc: str = "16:45"
     payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"
 
