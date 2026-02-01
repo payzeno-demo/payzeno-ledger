@@ -63,6 +63,20 @@ class StubScheduler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, int]] = []
 
+    async def try_acquire_batch_lock(self, session: Any, batch_id: str) -> bool:
+        self.sessions.append(session)
+        self.batch_ids.append(batch_id)
+        return self.acquired
+
+
+class StubRunRepository:
+    def __init__(self, rows: dict[str, Any] | None = None) -> None:
+        self.rows = rows or {}
+
+    def __init__(self, rows: dict[str, Any] | None = None) -> None:
+        self.rows = rows or {}
+        self.reads: list[str] = []
+
     body = await retry_item(
         Body(requested_by="usr_ops_1"),
         sessions_factory,
@@ -79,8 +93,75 @@ class StubScheduler:
 
 
 async def test_a_settled_retry_never_opens_a_session(sessions_factory) -> None:
+    scheduler = StubScheduler(result=None)
+
+    with pytest.raises(SettlementLockedError) as excinfo:
+        await retry_item(
+            Body(requested_by="usr_ops_1"),
+            sessions_factory,
+            scheduler,
+            StubRepositories(items=StubItemRepository({"ri_X": current})),
+            CALLER,
+            "ri_X",
+        )
+
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.code == "settlement_locked"
+
+
+async def test_the_locked_response_carries_the_items_current_state(sessions_factory) -> None:
+    """`error.details.item`. The console renders "already settling" from it.
+
+    Current, not stale: the item is re-read in its own session after the claim failed, so
+    the body describes the world the caller should now render rather than the world they
+    clicked in. During an incident that saves a refetch per click on an already-busy
+    service.
     """
     current = make_item(item_id="ri_X", batch_id="sb_QK", status="settled")
+    scheduler = StubScheduler(result=None)
+
+    with pytest.raises(SettlementLockedError) as excinfo:
+        await retry_item(
+            Body(requested_by=None),
+            sessions_factory,
+            scheduler,
+            StubRepositories(items=items),
+            CALLER,
+            "ri_X",
+        )
+
+    assert excinfo.value.details["item_id"] == "ri_X"
+    assert excinfo.value.details["item"]["status"] == "settled"
+    assert items.reads == ["ri_X"]
+    assert sessions_factory.begin_count == 1
+
+
+async def test_retry_passes_requested_by_through(sessions_factory) -> None:
+    """It lands on the metric label, and that is how we know a human did it.
+
+    `requested_by='retry_drain'` versus a user id is the difference between "the drain is
+    working" and "somebody is clicking the button during an incident".
+    """
+    scheduler = StubScheduler(result=make_item(item_id="ri_X", batch_id="sb_QK"))
+
+    await retry_item(
+        Body(requested_by="usr_ops_7"),
+        sessions_factory,
+        scheduler,
+        StubRepositories(),
+        CALLER,
+        "ri_X",
+    )
+
+    assert scheduler.calls[0][1] == "usr_ops_7"
+
+
+async def test_a_body_without_requested_by_falls_back_to_the_caller(sessions_factory) -> None:
+    """`RetryReconciliationItemRequest` carries `requested_by?` only.
+
+    The item id is bound by the path and is deliberately not repeated in the body. When
+    the field is absent the internal caller identity stands in, so the label is never
+    empty — an unattributed retry during an incident is the one you most want attributed.
     """
     scheduler = StubScheduler(result=make_item(item_id="ri_X", batch_id="sb_QK"))
 
@@ -142,3 +223,10 @@ async def test_backlog_passes_its_filters_through() -> None:
 
 
 async def test_backlog_with_no_filters_returns_everything() -> None:
+    """The ops dashboard tile. On the night of PAY-2041 it read 4,113."""
+    backlog = StubBacklog({"total_items": 0, "buckets": [], "stale_batches": 0})
+
+    payload = await get_backlog(backlog, None, "sb_QK")
+
+    assert payload["total_items"] == 12
+    assert backlog.calls == [(None, "sb_QK")]
