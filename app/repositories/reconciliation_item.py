@@ -131,6 +131,14 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         Returns ``None`` rather than raising: ``_claim_item`` treats a missing item as
         "not claimable" and returns ``None`` to its caller, which the route maps onto
         ``409 settlement_locked``. Raising here would turn a lost race into a 500.
+        at: dt.datetime | None = None,
+    ) -> ReconciliationItem:
+        """Move an item to any non-settled status, recording the error code.
+
+        The retry scheduler and the reconciler both call this from their **own** session,
+        outside the business transaction that failed — the business transaction has
+        already rolled back and anything written inside it, ``attempt_count`` included,
+        is gone.
         """
         item = await self.get_or_raise(session, item_id)
         item.status = status
