@@ -73,6 +73,9 @@ class PayzenoLedgerError(Exception):
     #: Stable machine-readable code. The console switches on it; do not reword.
     code: ClassVar[str] = "internal_error"
 
+    #: HTTP status ``app/api/error_handlers.py`` renders this condition as.
+    http_status: ClassVar[int] = 500
+
     def __init__(self, message: str | None = None, /, **details: Any) -> None:
         # `code` is normally a class fact. Two conditions genuinely carry a *runtime*
         # code — the acquirer's, forwarded verbatim — and those pass it as a keyword.
@@ -283,6 +286,29 @@ class DualControlRequiredError(PayzenoLedgerError):
     ``AdjustmentService.approve`` compares ``approved_by`` with ``requested_by``. The
     ledger does not authenticate humans — payzeno-api's ``StaffGuard`` did — but it does
     record which one, because dual control is meaningless otherwise.
+    """
+
+    http_status: ClassVar[int] = 403
+
+
+class DuplicateDisputeError(PayzenoLedgerError):
+    """A ``dispute.opened`` arrived for a charge that already has an open dispute.
+
+    Raised in ``app/consumers/handlers/payments.py``. The consumer's ``_claim_event``
+    dedupes by ``event_id``; this catches the case where the *upstream* emitted two
+    distinct events for one dispute, which Worldflow does on re-presentment.
+    """
+
+    code: ClassVar[str] = "internal_error"
+    http_status: ClassVar[int] = 502
+
+
+class ProcessorUnavailableError(UpstreamError):
+    """The acquirer returned 5xx, rate-limited us, or the circuit is open.
+
+    When the circuit is open this is raised with **no HTTP call made at all** — see
+    ``app/clients/breaker.py``. The ``code`` keyword carries the acquirer's own reason so
+    ``RETRYABLE_ERROR_CODES`` can be consulted downstream.
     """
 
     code: ClassVar[str] = "internal_error"
