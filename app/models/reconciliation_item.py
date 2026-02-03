@@ -54,6 +54,10 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     """One line of an acquirer settlement file."""
 
     __tablename__ = "reconciliation_item"
+    #: Null when orphaned, and null by construction on every non-sale line — scheme fee
+    #: and adjustment lines have no charge. SettlementPoster's orphan guard runs BEFORE
+    #: the projection read for exactly this reason.
+    charge_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Added by 0024. Dispatches through POSTING_RULE_BY_LINE_TYPE; without it every
     #: refund, chargeback and fee line matches no charge and lands in `orphaned`.
     line_type: Mapped[str] = mapped_column(
@@ -62,6 +66,7 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
 
     #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
     fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    scheme_fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
     match_method: Mapped[str] = mapped_column(
@@ -76,3 +81,15 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
         """Whether nothing will move this item without an operator."""
         return self.status in {"settled", "failed", "orphaned"}
 
+    def compute_variance_minor(self) -> int:
+        """Signed difference between what the acquirer settled and what we authorised.
+
+        ``SettlementPoster`` compares ``abs(variance_minor)`` against
+        ``merchant.settlement_tolerance_minor`` **before** anything posts: acquirers
+        routinely settle a different amount than authorised (partial capture,
+        interchange downgrade, DCC, file error), and a wrong file silently accepted
+        credits the merchant the wrong amount while the ledger stays internally balanced.
+        """
+        if self.expected_gross_minor is None:
+            return 0
+        return self.gross_minor - self.expected_gross_minor

@@ -194,6 +194,7 @@ class Container:
             entries=repos.entries,
             accounts=repos.accounts,
             merchants=repos.merchants,
+            ledger=self.ledger_poster,
             processor=self.processor,
             publisher=self.publisher,
             flags=self.flags,
@@ -240,6 +241,7 @@ class Container:
             settings=settings,
         )
         self.backlog_service = BacklogService(
+            sessions=self.sessions,
             items=repos.items,
             batches=repos.batches,
             clock=self.clock,
@@ -300,6 +302,7 @@ class Container:
         self.audit_service = LedgerAuditService(
             sessions=self.sessions,
             entries=repos.entries,
+            balances=repos.balance_cache,
             clock=self.clock,
         )
         self.adjustment_service = AdjustmentService(
@@ -310,6 +313,7 @@ class Container:
         sqs_factory = sqs_client_factory(settings)
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
+            processed=repos.processed_events,
             charges=repos.charges,
             transactions=repos.transactions,
             clock=self.clock,
@@ -346,6 +350,8 @@ class Container:
             settings=settings,
         )
         self.reserve_release_job = ReserveReleaseJob(
+            sessions=self.sessions,
+            puller=self.ach_puller,
             repositories=repos,
             settings=settings,
         )
