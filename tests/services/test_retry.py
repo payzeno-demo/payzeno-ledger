@@ -52,6 +52,17 @@ class FakeLocks(AdvisoryLockManager):
         self.batch_locks: list[str] = []
         self.item_locks: list[str] = []
 
+    reconcile_retry_backoff_base_seconds = 30
+    """
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    poster = StubPoster(
+        raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
+    )
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    await scheduler.retry_item(seeded_item.id)
     first_delay = (seeded_item.next_attempt_at - NOW).total_seconds()
     seeded_item.status = "retryable"
 
