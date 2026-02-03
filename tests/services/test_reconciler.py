@@ -43,10 +43,20 @@ class RecordingLocks(AdvisoryLockManager):
         self.item_locks: list[str] = []
         self.row_locks: list[str] = []
 
+    async def acquire_batch_lock(self, session: Any, batch_id: str) -> None:
+        self.batch_locks.append(batch_id)
+
     async def try_acquire_batch_lock(self, session: Any, batch_id: str) -> bool:
         if self.grant:
             self.batch_locks.append(batch_id)
         return self.grant
+
+    async def acquire_item_lock(self, session: Any, item_id: str) -> None:
+        self.item_locks.append(item_id)
+
+
+class ScriptedPoster(SettlementPoster):
+    """Settles everything, unless the item id appears in `fail_with`."""
 
     async def post_settlement(self, session: Any, item: Any, *, caller: str) -> SettlementResult:
         self.calls.append((item.id, caller))
@@ -132,6 +142,25 @@ async def test_it_takes_no_row_locks_at_all(
 async def test_process_item_takes_an_id_and_re_reads_the_row(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
+    # A hydrated object passed down from the list query removes the re-read and changes the
+    # race. The signature is part of the contract, not an implementation detail.
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
+    await service._process_item(sessions_factory.session, "ri_sweep_0")
+
+    assert poster.calls == [("ri_sweep_0", "batch_pass")]
+    assert items.rows["ri_sweep_0"].status == "settled"
+
+
+async def test_sweep_skips_settled_items(sessions_factory, batches, items, runs) -> None:
+    """The reconciler's half of the pair of tests that passed on the buggy code.
+
+    Sequential, one session, one loop. The re-read inside `_process_item` sees a status
+    outside RETRYABLE_STATUSES and returns. That is genuinely the right behaviour — it is
+    just not a concurrency test, and it was read as one for three months.
+    """
+    batches.seed(make_batch(batch_id="sb_skip", status="closed"))
     poster = ScriptedPoster(
         fail_with={"ri_sweep_1": RetryableSettlementError(item_id="ri_sweep_1", code="rate_limited")}
     )
