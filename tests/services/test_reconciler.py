@@ -103,6 +103,9 @@ def batch_of_three(batches, items):
 async def test_reconcile_batch_settles_every_retryable_item(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch(batch_of_three, trigger="scheduled")
 
     assert run.status == "succeeded"
@@ -209,6 +212,16 @@ async def test_run_counters_are_locals_not_orm_mutations(
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
+    stored = runs.rows[run.id]
+
+    assert stored.items_total == 3
+    assert stored.items_settled == 3
+    assert stored.finished_at is not None
+
+
+async def test_publishes_settlement_completed_on_success(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     poster = ScriptedPoster(
         fail_with={"ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="rate_limited")}
     )
