@@ -189,3 +189,15 @@ class ReconciliationService:
             item.attempt_count += 1
             item.last_attempt_at = self._clock.now()
             item.last_error_code = code
+            item.status = "orphaned" if code == "orphaned_item" else "failed"
+
+    async def _publish_completion(
+        self, run: ReconciliationRun, stats: ReconcilePassStats
+    ) -> None:
+        """Emit ``settlement.completed`` (chunked) or ``settlement.reconciliation_failed``.
+
+        ``settled_charge_ids`` is the sole driver of payzeno-api's
+        ``charge captured -> settled`` transition, so it is chunked at
+        ``COMPLETION_CHUNK_SIZE`` and every chunk carries ``chunk_index`` /
+        ``chunk_count``; the API side only marks a batch complete when it has seen all
+        of them.
