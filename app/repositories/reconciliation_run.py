@@ -71,6 +71,14 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         items_settled: int,
         items_failed: int,
         status: str,
+        at: dt.datetime | None = None,
+    ) -> ReconciliationRun:
+        """Close a run with its counts.
+
+        ``status`` is ``succeeded`` only when nothing failed. A pass that left thirteen
+        items retryable is a ``failed`` run over a ``partially_reconciled`` batch, and
+        both of those are ordinary Tuesday states — the sweep will pick the batch up
+        again in fifteen minutes.
         """
         run = await self.get_or_raise(session, run_id)
         run.items_total = items_total

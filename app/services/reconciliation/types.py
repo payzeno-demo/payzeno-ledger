@@ -59,6 +59,8 @@ class ReconcilePassStats:
     """
 
     items_total: int = 0
+    settled: int = 0
     posted_total_minor: int = 0
+    fee_total_minor: int = 0
     net_total_minor: int = 0
 
