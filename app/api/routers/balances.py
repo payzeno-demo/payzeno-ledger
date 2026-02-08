@@ -36,6 +36,8 @@ router = APIRouter(
 )
 async def get_balance(
     balances: BalanceServiceDep,
+    merchant_id: Annotated[str, Path(min_length=8)],
+    currency: Annotated[str, Query(min_length=3, max_length=3)],
     as_of: Annotated[datetime | None, Query()] = None,
     livemode: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
@@ -54,6 +56,11 @@ async def get_balance(
 
 @router.get(
     "/{merchant_id}/history",
+    response_model=BalanceHistoryResponse,
+    summary="Bucketed balance timeseries",
+)
+async def get_balance_history(
+    balances: BalanceServiceDep,
     currency: Annotated[str, Query(min_length=3, max_length=3)],
     from_: Annotated[datetime, Query(alias="from")],
     to: Annotated[datetime, Query()],

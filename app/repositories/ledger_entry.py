@@ -117,7 +117,10 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
     async def sum_by_account_and_purpose(
         self,
         session: AsyncSession,
+        *,
+        account_id: str | None = None,
         purpose: str | None = None,
+        currency: str | None = None,
         livemode: bool | None = None,
         as_of: dt.datetime | None = None,
     ) -> Any:
@@ -214,6 +217,11 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         accumulated by the caller rather than by a window function, because the endpoint
         also needs the opening balance, which comes from a different query anyway.
         bucket = func.date_trunc(unit, LedgerEntry.created_at).label("bucket_start")
+        signed = func.sum(
+            case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
+        ) - func.sum(
+            case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
+        )
         stmt = (
             select(bucket, func.coalesce(signed, 0))
             .where(LedgerEntry.account_id == account_id)
@@ -261,6 +269,14 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         *,
         currency: str,
         as_of: dt.datetime | None = None,
+        limit: int = 10,
+    ) -> list[str]:
+        """Transaction ids whose own legs do not net to zero.
+
+        Only called when :meth:`trial_balance_by_currency` has already failed, so the
+        expensive ``GROUP BY transaction_id`` runs during an incident and never on the
+        happy path. The ids go straight into the ``ledger.imbalance_detected`` payload so
+        whoever is paged has somewhere to start.
         """
         signed = func.sum(
             case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
