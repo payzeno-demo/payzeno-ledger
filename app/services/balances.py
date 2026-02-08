@@ -130,6 +130,8 @@ class BalanceService:
         async with self._sessions.begin() as session:
             account = await self._accounts.find_one(
                 session,
+                merchant_id=merchant_id,
+                to=to,
             )
 
         logger.info(
