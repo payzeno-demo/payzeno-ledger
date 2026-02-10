@@ -30,3 +30,14 @@ from app.repositories.reconciliation_item import ReconciliationItemRepository
 from app.services.reconciliation.constants import MAX_ATTEMPTS, RETRYABLE_STATUSES
 from app.services.reconciliation.poster import SettlementPoster
 
+logger = get_logger(__name__)
+
+
+class RetryScheduler:
+    """Retries a single reconciliation item.
+
+    Introduced in PAY-1607 so a transient processor failure no longer waits up to fifteen
+    minutes for the next sweep.
+
+    Concurrency: the item row lock in :meth:`_claim_item` excludes other ``RetryScheduler``
+    callers, but it does **not** exclude ``ReconciliationService.reconcile_batch``, which

@@ -52,7 +52,37 @@ class FakeLocks(AdvisoryLockManager):
         self.batch_locks: list[str] = []
         self.item_locks: list[str] = []
 
+    async def acquire_batch_lock(self, session: Any, batch_id: str) -> None:
+        self.batch_locks.append(batch_id)
+
     reconcile_retry_backoff_base_seconds = 30
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert "settled" not in RETRYABLE_STATUSES
+    assert await scheduler._claim_item(sessions_factory.session, settled.id) is None
+
+
+# --------------------------------------------------------------------------------------
+# retry_item
+# --------------------------------------------------------------------------------------
+
+
+async def test_retry_item_settles_and_returns_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
+
+    assert await scheduler.retry_item(seeded_item.id) is None
+
+
+async def test_retry_is_idempotent(sessions_factory, items, seeded_item) -> None:
+    """PAY-1607's original test. It passes on the buggy code and it always did.
+
+    Two calls, one after the other, one event loop, one session. The second call's SELECT
+    sees the first call's committed row, so of course only one transaction exists. Nothing
+    here runs the sweep and the retry at the same time, and the shared in-process session
+    fixture makes it impossible to. That gap is PAY-2053, and the test that closes it is
+    tests/integration/test_reconciliation_concurrency.py.
     """
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)

@@ -63,6 +63,11 @@ class StubScheduler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, int]] = []
 
+    def __init__(self, *, acquired: bool = True) -> None:
+        self.acquired = acquired
+        self.sessions: list[Any] = []
+        self.batch_ids: list[str] = []
+
     async def try_acquire_batch_lock(self, session: Any, batch_id: str) -> bool:
         self.sessions.append(session)
         self.batch_ids.append(batch_id)
@@ -73,9 +78,19 @@ class StubRunRepository:
     def __init__(self, rows: dict[str, Any] | None = None) -> None:
         self.rows = rows or {}
 
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        return self.rows[entity_id]
+
+
+class StubItemRepository:
     def __init__(self, rows: dict[str, Any] | None = None) -> None:
         self.rows = rows or {}
         self.reads: list[str] = []
+
+    settled = make_item(
+        item_id="ri_X", batch_id="sb_QK", status="settled", settled_transaction_id="txn_1"
+    )
+    scheduler = StubScheduler(result=settled)
 
     body = await retry_item(
         Body(requested_by="usr_ops_1"),
@@ -118,6 +133,7 @@ async def test_the_locked_response_carries_the_items_current_state(sessions_fact
     service.
     """
     current = make_item(item_id="ri_X", batch_id="sb_QK", status="settled")
+    items = StubItemRepository({"ri_X": current})
     scheduler = StubScheduler(result=None)
 
     with pytest.raises(SettlementLockedError) as excinfo:
@@ -200,6 +216,50 @@ async def test_an_unknown_item_is_a_404_not_a_409(sessions_factory) -> None:
 
 
 async def test_start_run_returns_the_serialised_run(sessions_factory) -> None:
+    reconciler = StubReconciler()
+
+    """
+    locks = StubLocks()
+
+    await start_run(
+        Body(batch_id="sb_QK", trigger="manual", max_items=None),
+        sessions_factory,
+        locks,
+        StubReconciler(),
+        CALLER,
+    )
+
+    assert locks.batch_ids == ["sb_QK"]
+    assert sessions_factory.begin_count == 1
+    assert sessions_factory.sessions[0].committed is True
+
+
+async def test_start_run_is_409_when_a_sweep_already_holds_the_batch(sessions_factory) -> None:
+    """`try_acquire_batch_lock` returning False is `settlement_locked`, not a 500.
+
+    An operator starting a manual run during a scheduled sweep is doing something
+    reasonable and should be told so, not paged about. Blocking instead would park the
+    request for the length of the pass and time out at the load balancer.
+    """Only the scheduler passes `scheduled`, and it does not come through this route."""
+    reconciler = StubReconciler()
+
+    await start_run(
+        Body(batch_id="sb_QK", trigger=None, max_items=None),
+        sessions_factory,
+        StubLocks(),
+        reconciler,
+        CALLER,
+    )
+
+    assert reconciler.calls[0][1] == "manual"
+
+
+# --------------------------------------------------------------------------------------
+# GET /internal/v1/reconciliation/runs/{runId} and /backlog
+# --------------------------------------------------------------------------------------
+
+
+async def test_get_run_returns_the_run(sessions_factory) -> None:
     body = await get_run(sessions_factory, StubRepositories(runs=runs), "rr_000001")
 
     assert body["id"] == "rr_000001"
