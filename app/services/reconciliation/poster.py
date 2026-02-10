@@ -114,7 +114,9 @@ class SettlementPoster:
             PostingContext(
                 livemode=item.livemode,
                 gross_minor=item.gross_minor,
+                fee_minor=item.fee_minor,
                 scheme_fee_minor=item.scheme_fee_minor,
+                reserve_bps=charge.reserve_bps,
                 acquirer=item.acquirer,
                 code=code,
                 item_id=item.id,
