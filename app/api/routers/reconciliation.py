@@ -110,9 +110,22 @@ def _serialise_run(run: Any) -> dict[str, Any]:
 @router.post(
     "/runs",
     response_model=ReconciliationRun,
+    response_model=ReconciliationRun,
     summary="Fetch one reconciliation run",
 )
 async def get_run(
     sessions: SessionsDep,
     repositories: ReposDep,
     status_code=status.HTTP_202_ACCEPTED,
+    item_id: Annotated[str, Path(min_length=8)],
+) -> dict[str, Any]:
+    """Reachable from the admin console (``POST /v1/settlements/:batchId/items/:itemId/retry``)
+    and from :class:`~app.workers.retry_drain.RetryDrainJob`. Both land on the same
+    :meth:`RetryScheduler.retry_item`.
+
+    ``retry_item`` returning ``None`` is a **no-op, not a failure**: the item was not in
+    ``RETRYABLE_STATUSES`` when the claim ran, which usually means something else settled
+    it first. The route renders that as ``409 settlement_locked`` carrying the item's
+    current state under ``details.item``, and the console's ``useRetrySettlementItem()``
+    shows "already settling" and refetches rather than surfacing an error toast. Its rate
+    is a signal to watch, not an error budget to burn.

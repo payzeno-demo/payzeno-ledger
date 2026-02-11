@@ -11,3 +11,15 @@ before widening, and nobody widened it. Production runs four tasks, so on any gi
 minute exactly one of them drains and the other three sweep. A 4,000-item backlog
 therefore drains at one task's rate while three sweeps keep passing over the same items.
 
+**It shares its ``RetryScheduler`` with the HTTP route.** ``app/api/routers/reconciliation.py``
+resolves the same instance out of the container, which holds the same
+:class:`~app.services.reconciliation.poster.SettlementPoster` the 900s sweep uses. One
+settlement implementation, three callers.
+
+The drain itself is serial: :meth:`RetryScheduler.drain` walks its candidate list one item
+at a time. Firing ``limit`` retries concurrently would undo the backoff column entirely
+and hammer an acquirer that is already returning 504s.
+"""
+
+from __future__ import annotations
+

@@ -52,11 +52,63 @@ class FakeLocks(AdvisoryLockManager):
         self.batch_locks: list[str] = []
         self.item_locks: list[str] = []
 
+    async def acquire_batch_lock(self, session: Any, batch_id: str) -> None:
+        self.batch_locks.append(batch_id)
+
     reconcile_retry_backoff_base_seconds = 30
+    *,
+    locks: FakeLocks | None = None,
+) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert "settled" not in RETRYABLE_STATUSES
+    assert await scheduler._claim_item(sessions_factory.session, settled.id) is None
+
+
+# --------------------------------------------------------------------------------------
+# retry_item
+# --------------------------------------------------------------------------------------
+
+
+async def test_retry_item_settles_and_returns_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
+
+    assert await scheduler.retry_item(seeded_item.id) is None
+
+
+async def test_retry_is_idempotent(sessions_factory, items, seeded_item) -> None:
+    """PAY-1607's original test. It passes on the buggy code and it always did.
+
+    Two calls, one after the other, one event loop, one session. The second call's SELECT
+    sees the first call's committed row, so of course only one transaction exists. Nothing
+    here runs the sweep and the retry at the same time, and the shared in-process session
+    fixture makes it impossible to. That gap is PAY-2053, and the test that closes it is
+    tests/integration/test_reconciliation_concurrency.py.
     """
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
+    second = await scheduler.retry_item(seeded_item.id)
+
+    assert first is not None
+    assert second is None  # already settled -> not claimable
+    assert len(set(poster.settled_by_key.values())) == 1
+
+
+# --------------------------------------------------------------------------------------
+# the out-of-band failure branches
+# --------------------------------------------------------------------------------------
+
+
+async def test_failure_persists_attempt_count(sessions_factory, items, seeded_item) -> None:
+    """The branch that makes the incident's 4,113-item backlog possible at all.
+
+    `post_settlement` raises, the business transaction rolls back, and everything written
+    inside it — attempt_count, last_attempt_at, status='settling' — is gone. `_mark_retryable`
+    therefore opens its OWN session and writes them again. If it did not, the drain could
+    never mark anything retryable and would spin on the same item forever.
     poster = StubPoster(
         raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
     )
@@ -85,3 +137,25 @@ class FakeLocks(AdvisoryLockManager):
 
 
 async def test_retry_exhausted_is_the_declared_error_type() -> None:
+    settled = await scheduler.drain(limit=50)
+
+    assert settled == 5
+    assert len(poster.calls) == 5
+
+
+async def test_drain_respects_its_limit(sessions_factory, items, batches) -> None:
+    from tests.factories import make_batch
+
+    batches.seed(make_batch(batch_id="sb_drain_limit", status="closed"))
+    for n in range(10):
+        items.seed(
+            make_item(
+                item_id=f"ri_lim_{n:02d}",
+                batch_id="sb_drain_limit",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status="retryable",
+                next_attempt_at=NOW,
+            )
+        )
+
