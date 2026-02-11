@@ -48,10 +48,14 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     """
 
     __tablename__ = "merchant_projection"
+    entity_name: ClassVar[str] = "merchant_projection"
+
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
     country: Mapped[str | None] = mapped_column(Country, nullable=True)
     default_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
 
+    risk_tier: Mapped[str] = mapped_column(Text, nullable=False)
+    reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     pricing_model: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="blended"
     )
@@ -94,8 +98,15 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     row, never off ``merchant_projection``.
     """
 
+    entity_name: ClassVar[str] = "settlement_charge"
+
+    merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capture_method: Mapped[str] = mapped_column(Text, nullable=False)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    captured_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     __table_args__ = (
         Index("ix_settlement_charge_merchant", "merchant_id"),
         # Match strategy 2 (NetworkTransactionMatch) drives off this.
@@ -120,11 +131,21 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
         ),
     )
 
+    def is_captured(self) -> bool:
+        """Whether payzeno-api has already captured this charge itself."""
+        return self.captured_at is not None
+
+    __tablename__ = "bank_account_projection"
     bank_account_id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    country: Mapped[str] = mapped_column(Country, nullable=False)
     scheme: Mapped[str] = mapped_column(Text, nullable=False)
 
     routing_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+    iban_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+    sort_code_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False)
     def matches_rail(self, method: str) -> bool:
         """Whether this account's scheme can carry the given payout method."""
         required = {
