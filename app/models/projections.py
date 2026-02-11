@@ -54,6 +54,7 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     country: Mapped[str | None] = mapped_column(Country, nullable=True)
     default_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
 
+    status: Mapped[str] = mapped_column(Text, nullable=False)
     risk_tier: Mapped[str] = mapped_column(Text, nullable=False)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     pricing_model: Mapped[str] = mapped_column(
@@ -74,6 +75,7 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     capture_at_settlement: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+    payout_schedule: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
         Index("ix_merchant_projection_status", "status"),
         Index("ix_merchant_projection_occurred", "source_occurred_at"),
@@ -98,12 +100,17 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     row, never off ``merchant_projection``.
     """
 
+    __tablename__ = "settlement_charge"
     entity_name: ClassVar[str] = "settlement_charge"
 
+    charge_id: Mapped[str] = mapped_column(Text, primary_key=True)
     merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
+
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     capture_method: Mapped[str] = mapped_column(Text, nullable=False)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    authorized_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     captured_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -146,6 +153,15 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     sort_code_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
 
     status: Mapped[str] = mapped_column(Text, nullable=False)
+    def is_usable(self) -> bool:
+        """Only a ``validated`` account may receive money.
+
+        ``PayoutInitiator.initiate`` raises :class:`BankAccountUnusableError` otherwise —
+        including for a scheme that does not match the rail (``sepa`` needs ``iban``,
+        ``faster_payments`` needs ``uk_sort_code``, both ACH rails need ``aba``).
+        """
+        return self.status == "validated"
+
     def matches_rail(self, method: str) -> bool:
         """Whether this account's scheme can carry the given payout method."""
         required = {
