@@ -35,7 +35,22 @@ class WorldflowClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.worldflow_base_url,
+            api_key=settings.worldflow_api_key,
             acquirer=ACQUIRER,
+            acquirer_account=settings.worldflow_acquirer_account,
+        )
+
+    async def confirm_settlement(
+        self, acquirer: str, acquirer_reference: str, batch_id: str
+    ) -> None:
+        """Acknowledge receipt of one settlement line.
+
+        Called by every reconciliation item regardless of line type and regardless of
+        whether the merchant defers capture. It is therefore the call whose failure
+        backs up a whole batch rather than a handful of merchants.
+        """
+        await self._http.post(
+            f"/v2/settlement-files/{batch_id}/confirm",
             json={
                 "acquirer_reference": acquirer_reference,
                 "confirmed_by": "payzeno-ledger",
