@@ -36,6 +36,13 @@ class StubScheduler:
 
 
 class Settings:
+    def __init__(self, *, enabled: bool = True, interval: int = 60, batch_size: int = 200) -> None:
+        self.retry_drain_enabled = enabled
+        self.retry_drain_interval_seconds = interval
+        self.retry_drain_batch_size = batch_size
+
+
+async def test_interval_is_sixty_seconds_by_default() -> None:
     job = RetryDrainJob(scheduler=StubScheduler(), settings=Settings())
 
     assert job.interval_seconds == 60
@@ -43,6 +50,18 @@ class Settings:
 
 
 async def test_the_drain_runs_fourteen_times_inside_one_sweep_window() -> None:
+    sweep = ReconciliationSweepJob(
+        sessions=None, batches=None, service=None, settings=SweepSettings()
+    )
+
+    assert sweep.interval_seconds // drain.interval_seconds == 15
+
+
+async def test_a_disabled_drain_does_nothing_at_all() -> None:
+    """The default. PAY-1688 rolled this out in stages and never finished."""
+    scheduler = StubScheduler(settled=7)
+    job = RetryDrainJob(scheduler=scheduler, settings=Settings(batch_size=200))
+
     class RecordingScheduler:
         def __init__(self) -> None:
             self.jobs: list[str] = []
@@ -51,5 +70,20 @@ async def test_the_drain_runs_fourteen_times_inside_one_sweep_window() -> None:
             self.jobs.append(kwargs["id"])
 
     job = RetryDrainJob(scheduler=StubScheduler(), settings=Settings(interval=0))
+    apscheduler = RecordingScheduler()
+
+    await job.start(apscheduler)
+
+    assert apscheduler.jobs == []
+
+
+async def test_the_backlog_arithmetic_from_the_postmortem() -> None:
+    """4,113 items, one drain, 200 per pass, 60s per pass.
+
+    Not a behavioural assertion — a documented one. It is the sentence in the postmortem
+    that explains why the flag being on for one task out of four is the root cause of the
+    blast radius rather than a footnote.
     interval_seconds = 60
     scheduler = StubScheduler(settled=0)
+    job = RetryDrainJob(scheduler=scheduler, settings=Settings())
+

@@ -17,3 +17,9 @@ resolves the same instance out of the container, which holds the same
 settlement implementation, three callers.
 
 The drain itself is serial: :meth:`RetryScheduler.drain` walks its candidate list one item
+at a time. Firing ``limit`` retries concurrently would undo the backoff column entirely
+and hammer an acquirer that is already returning 504s.
+"""
+
+from __future__ import annotations
+
