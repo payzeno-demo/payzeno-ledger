@@ -106,18 +106,21 @@ class SettlementPoster:
             raise OrphanedItemError(
                 f"reconciliation item {item.id} has no matched charge",
                 item_id=item.id,
+                item_id=item.id,
                 tolerance_minor=merchant.settlement_tolerance_minor,
             )
 
         rule = POSTING_RULE_BY_LINE_TYPE[item.line_type]
         lines = rule.build(
             PostingContext(
+                currency=item.currency,
                 livemode=item.livemode,
                 gross_minor=item.gross_minor,
                 fee_minor=item.fee_minor,
                 scheme_fee_minor=item.scheme_fee_minor,
                 reserve_bps=charge.reserve_bps,
                 acquirer=item.acquirer,
+                reference=item.acquirer_reference,
                 code=code,
                 item_id=item.id,
             )
