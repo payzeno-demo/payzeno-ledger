@@ -140,6 +140,11 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
     account number and never a PAN (arc PCI).
     """
 
+    model: ClassVar[type[BankAccountProjection]] = BankAccountProjection
+    not_found_error: ClassVar[type[BankAccountProjectionNotFoundError]] = (
+        BankAccountProjectionNotFoundError
+    )
+
     async def upsert_if_newer(
         self, session: AsyncSession, projection: BankAccountProjection
     ) -> bool:
