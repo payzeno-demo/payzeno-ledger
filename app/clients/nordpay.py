@@ -30,6 +30,7 @@ class NordpayClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.nordpay_base_url,
+            acquirer=ACQUIRER,
             acquirer_account=settings.nordpay_acquirer_account,
             json={
                 "acquirer_reference": acquirer_reference,
@@ -49,10 +50,16 @@ class NordpayClient(ProcessorClient):
     ) -> CaptureResponse:
         response = await self._http.post(
             f"/v2/authorizations/{reference}/captures",
+            json={
+                "amount": amount_minor,
+                "currency": currency,
+                "merchant_reference": charge_id,
+            },
             headers={"Idempotency-Key": idempotency_key},
         )
         body = response.json()
         return CaptureResponse(
+            captured=bool(body.get("captured", True)),
             response = await self._http.get(
                 f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
             )
