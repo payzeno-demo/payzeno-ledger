@@ -48,10 +48,15 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     """
 
     __tablename__ = "merchant_projection"
+    entity_name: ClassVar[str] = "merchant_projection"
+
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
     country: Mapped[str | None] = mapped_column(Country, nullable=True)
     default_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
 
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_tier: Mapped[str] = mapped_column(Text, nullable=False)
+    reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     pricing_model: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="blended"
     )
@@ -70,6 +75,7 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     capture_at_settlement: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+    payout_schedule: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
         Index("ix_merchant_projection_status", "status"),
         Index("ix_merchant_projection_occurred", "source_occurred_at"),
@@ -94,8 +100,28 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     row, never off ``merchant_projection``.
     """
 
+    __tablename__ = "settlement_charge"
+    entity_name: ClassVar[str] = "settlement_charge"
+
+    charge_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
+
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capture_method: Mapped[str] = mapped_column(Text, nullable=False)
+    capture_at_settlement: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    platform_fee_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_fee_fixed_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    authorized_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    captured_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     __table_args__ = (
         Index("ix_settlement_charge_merchant", "merchant_id"),
         # Match strategy 2 (NetworkTransactionMatch) drives off this.
@@ -120,11 +146,45 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
         ),
     )
 
+    def is_captured(self) -> bool:
+        """Whether payzeno-api has already captured this charge itself."""
+        return self.captured_at is not None
+
+    __tablename__ = "bank_account_projection"
     bank_account_id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    country: Mapped[str] = mapped_column(Country, nullable=False)
     scheme: Mapped[str] = mapped_column(Text, nullable=False)
 
     routing_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+    iban_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+    sort_code_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    __table_args__ = (
+        Index("ix_bank_account_projection_merchant", "merchant_id", "currency"),
+        # CreatePayoutRequest.bank_account_id is optional, so the ledger must be able to
+        # find the merchant's default account for a currency. This index is how.
+        Index(
+            "pix_bank_account_projection_default",
+            "merchant_id",
+            "currency",
+            "livemode",
+            unique=True,
+            postgresql_where="is_default",
+        ),
+    )
+
+    def is_usable(self) -> bool:
+        """Only a ``validated`` account may receive money.
+
+        ``PayoutInitiator.initiate`` raises :class:`BankAccountUnusableError` otherwise —
+        including for a scheme that does not match the rail (``sepa`` needs ``iban``,
+        ``faster_payments`` needs ``uk_sort_code``, both ACH rails need ``aba``).
+        """
+        return self.status == "validated"
+
     def matches_rail(self, method: str) -> bool:
         """Whether this account's scheme can carry the given payout method."""
         required = {
