@@ -59,10 +59,24 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
     metrics = CountingMetrics()
     poster = SettlementPoster(
         transactions=transactions,
+        charges=charges,
         ledger=ledger,
+        flags=flags or StaticFeatureFlags({"duplicate_settlement_alarm": True}),
+        clock=FrozenClock(NOW),
+    )
+    return poster, processor, publisher, metrics
+
+
+@pytest.fixture
+def item():
+    return make_item(
         item_id="ri_post",
+        batch_id="sb_post",
         merchant_id="mer_post",
         gross_minor=10_000,
+        fee_minor=290,
+        variance_minor=0,
+        batch_id="sb_post",
         merchant_id="mer_post",
         gross_minor=413,
         net_minor=0,
@@ -138,6 +152,8 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
 
     charges.seed(make_charge_projection(charge_id="ch_deferred", capture_at_settlement=True))
     deferred = make_item(
+        item_id="ri_deferred",
+        batch_id="sb_post",
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
 
@@ -150,6 +166,7 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
 async def test_capture_carries_a_deterministic_idempotency_key(wired, charges) -> None:
     charges.seed(make_charge_projection(charge_id="ch_key", capture_at_settlement=True))
     line = make_item(
+        charge_id="ch_post",
     )
     poster, _, _, _ = build(*wired)
 
