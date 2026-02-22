@@ -54,6 +54,8 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     """One line of an acquirer settlement file."""
 
     __tablename__ = "reconciliation_item"
+    entity_name: ClassVar[str] = "reconciliation_item"
+
     #: Null when orphaned, and null by construction on every non-sale line — scheme fee
     #: and adjustment lines have no charge. SettlementPoster's orphan guard runs BEFORE
     #: the projection read for exactly this reason.
@@ -67,6 +69,8 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
     fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     scheme_fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    #: From the matched `settlement_charge`; null while unmatched. Migration 0026.
+    expected_gross_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
     match_method: Mapped[str] = mapped_column(
@@ -77,6 +81,10 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    settled_transaction_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
+    )
+
     def is_terminal(self) -> bool:
         """Whether nothing will move this item without an operator."""
         return self.status in {"settled", "failed", "orphaned"}

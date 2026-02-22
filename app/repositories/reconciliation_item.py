@@ -177,6 +177,7 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
             func.coalesce(func.sum(ReconciliationItem.fee_minor), 0),
             func.coalesce(func.sum(ReconciliationItem.net_minor), 0),
         ).where(ReconciliationItem.batch_id == batch_id)
+        currency: str | None = None,
         """
         stmt = (
             select(
