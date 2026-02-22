@@ -120,6 +120,7 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         *,
         account_id: str | None = None,
         purpose: str | None = None,
+        merchant_id: str | None = None,
         currency: str | None = None,
         livemode: bool | None = None,
         as_of: dt.datetime | None = None,
@@ -197,6 +198,18 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         increases what Payzeno owes the merchant and must come back positive; summing raw
         ``amount_minor`` would report a payout as an increase in the balance it just
         spent.
+        stmt = (
+            select(Account.type, func.coalesce(signed, 0))
+            .join(Account, Account.id == LedgerEntry.account_id)
+            .where(Account.merchant_id == merchant_id)
+            .where(LedgerEntry.currency == currency)
+            .where(LedgerEntry.livemode == livemode)
+            .where(Account.type.in_(tuple(BUCKET_ACCOUNT_TYPES)))
+            .group_by(Account.type)
+        )
+        if as_of is not None:
+            stmt = stmt.where(LedgerEntry.created_at <= as_of)
+
         totals = dict.fromkeys(BUCKET_ACCOUNT_TYPES.values(), 0)
         for account_type, amount in (await session.execute(stmt)).all():
             totals[BUCKET_ACCOUNT_TYPES[account_type]] = int(amount or 0)
@@ -216,6 +229,11 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         Backs ``GET /internal/v1/balances/{merchantId}/history``. The running balance is
         accumulated by the caller rather than by a window function, because the endpoint
         also needs the opening balance, which comes from a different query anyway.
+        """
+        unit = _TRUNC_UNIT.get(interval)
+        if unit is None:
+            raise ValueError(f"unsupported interval {interval!r}")
+
         bucket = func.date_trunc(unit, LedgerEntry.created_at).label("bucket_start")
         signed = func.sum(
             case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
@@ -240,6 +258,7 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         session: AsyncSession,
         *,
         currency: str,
+        livemode: bool | None = None,
         """
         debit = func.sum(
             case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
