@@ -131,6 +131,13 @@ class BalanceService:
             account = await self._accounts.find_one(
                 session,
                 merchant_id=merchant_id,
+                livemode=livemode,
+            )
+            if account is None:
+                return {"merchant_id": merchant_id, "currency": currency, "buckets": []}
+
+            rows = await self._entries.sum_by_bucket(
+                session,
                 to=to,
             )
 
