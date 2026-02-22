@@ -25,11 +25,43 @@ class LedgerEntry(Base, CreatedAtMixin, LivemodeMixin):
     """One debit or credit leg of a :class:`~app.models.ledger_transaction.LedgerTransaction`."""
 
     __tablename__ = "ledger_entry"
+    entity_name: ClassVar[str] = "ledger_entry"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
     transaction_id: Mapped[str] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=False
     )
+    account_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("account.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Direction carries the sign. `amount_minor` is always strictly positive.
+    direction: Mapped[str] = mapped_column(entry_direction_enum, nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    #: 0-based ordinal within the transaction. Stable, so a trial-balance report and the
+    #: ops CLI print the legs of a posting in the order the rule built them.
+    sequence: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    __table_args__ = (
+        # Invariant 4 of domain-model.md §7, at the storage layer. LedgerPoster raises
+        # NegativeAmountError before it gets here; this is the backstop for the ops CLI
+        # and the Alembic data migrations, which write entries through raw SQL.
+        CheckConstraint("amount_minor > 0", name="amount_positive"),
+        # Two legs of one transaction can never share a sequence, so a partially-retried
+        # insert cannot produce a transaction with three legs numbered 0, 1, 1.
+        Index("uq_ledger_entry_txn_sequence", "transaction_id", "sequence", unique=True),
+        # arc PERF, migration 0015. LedgerEntryRepository.sum_by_account_and_purpose and
+        # trial_balance_by_currency both drive off this; before it, computing one
+        # merchant's balance was a sequential scan of the whole table.
+        Index(
+            "ix_ledger_entry_account_created",
+            "account_id",
+            "created_at",
+            postgresql_ops={"created_at": "DESC"},
+        ),
+        Index("ix_ledger_entry_transaction_id", "transaction_id"),
+    )
+
     def signed_minor(self) -> int:
         """Debit-positive signed amount, for balance arithmetic.
 
