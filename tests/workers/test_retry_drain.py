@@ -60,7 +60,17 @@ async def test_the_drain_runs_fourteen_times_inside_one_sweep_window() -> None:
 async def test_a_disabled_drain_does_nothing_at_all() -> None:
     """The default. PAY-1688 rolled this out in stages and never finished."""
     scheduler = StubScheduler(settled=7)
+    scheduler = StubScheduler(settled=200)
     job = RetryDrainJob(scheduler=scheduler, settings=Settings(batch_size=200))
+
+    result = await job.run_once()
+
+    assert scheduler.calls == [200]
+    assert result.items_processed == 200
+
+
+async def test_a_zero_interval_stops_the_job_being_scheduled() -> None:
+    """`RETRY_DRAIN_INTERVAL_SECONDS=0`, pushed at 01:44. The bleeding stopped."""
 
     class RecordingScheduler:
         def __init__(self) -> None:
@@ -83,7 +93,17 @@ async def test_the_backlog_arithmetic_from_the_postmortem() -> None:
     Not a behavioural assertion — a documented one. It is the sentence in the postmortem
     that explains why the flag being on for one task out of four is the root cause of the
     blast radius rather than a footnote.
+    """
+    backlog = 4_113
+    per_pass = 200
     interval_seconds = 60
+    sweep_interval_seconds = 900
+
     scheduler = StubScheduler(settled=0)
     job = RetryDrainJob(scheduler=scheduler, settings=Settings())
 
+    result = await job.run_once()
+
+    assert result.items_processed == 0
+    assert result.error is None
+    assert result.name == "retry_drain"

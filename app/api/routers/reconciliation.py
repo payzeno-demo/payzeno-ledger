@@ -110,6 +110,44 @@ def _serialise_run(run: Any) -> dict[str, Any]:
 @router.post(
     "/runs",
     response_model=ReconciliationRun,
+    summary="Reconcile one settlement batch now",
+)
+async def start_run(
+    body: StartReconciliationRequest,
+    sessions: SessionsDep,
+    locks: LocksDep,
+    reconciler: ReconcilerDep,
+    caller: InternalCaller,
+) -> dict[str, Any]:
+    """Manual trigger for the same pass the 900s sweep runs.
+
+    The lock probe below is a **pre-flight check, not the lock itself**. It opens a short
+    transaction, tries the batch advisory lock, and lets the transaction close — which
+    releases it, because every lock in ``app/db/locks.py`` is ``pg_advisory_xact_lock``
+    and dies with its transaction. ``reconcile_batch`` then takes the real lock on its
+    own guard session. Probing first is what turns "an operator clicked reconcile while
+    the sweep was mid-batch" into a clean ``409 settlement_locked`` instead of a request
+    that blocks for four minutes and then times out at the load balancer.
+
+    It blocks for the length of the pass. That is wrong for a 202 and it is why nothing
+    but the ops console calls it — PAY-1912 is open to move the pass onto the scheduler
+    and hand back the run row immediately.
+    """
+    async with sessions.begin() as probe:
+        acquired = await locks.try_acquire_batch_lock(probe, body.batch_id)
+        if not acquired:
+            metrics.increment("ReconciliationRunRejected", reason="batch_locked")
+            raise SettlementLockedError(
+                f"batch {body.batch_id} is already being reconciled",
+                batch_id=body.batch_id,
+            )
+
+    logger.info(
+        "reconciliation_run_requested",
+        batch_id=body.batch_id,
+        trigger=body.trigger or "manual",
+        caller=caller,
+    )
     response_model=ReconciliationRun,
     summary="Fetch one reconciliation run",
 )
@@ -117,6 +155,14 @@ async def get_run(
     sessions: SessionsDep,
     repositories: ReposDep,
     status_code=status.HTTP_202_ACCEPTED,
+    summary="Retry one reconciliation item",
+)
+async def retry_item(
+    body: RetryReconciliationItemRequest,
+    sessions: SessionsDep,
+    retries: RetriesDep,
+    repositories: ReposDep,
+    caller: InternalCaller,
     item_id: Annotated[str, Path(min_length=8)],
 ) -> dict[str, Any]:
     """Reachable from the admin console (``POST /v1/settlements/:batchId/items/:itemId/retry``)
