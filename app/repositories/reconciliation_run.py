@@ -127,6 +127,10 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
 
         Backs ``GET /internal/v1/reconciliation/runs``. Uses
         ``ix_reconciliation_run_batch_started``.
+        """
+        stmt = select(ReconciliationRun).order_by(ReconciliationRun.started_at.desc())
+        if batch_id is not None:
+            stmt = stmt.where(ReconciliationRun.batch_id == batch_id)
         stmt = stmt.limit(limit)
         return list((await session.execute(stmt)).scalars().all())
 

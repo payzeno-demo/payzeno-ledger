@@ -54,6 +54,11 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     """One line of an acquirer settlement file."""
 
     __tablename__ = "reconciliation_item"
+    entity_name: ClassVar[str] = "reconciliation_item"
+
+    batch_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("settlement_batch.id", ondelete="RESTRICT"), nullable=False
+    )
     #: Null when orphaned, and null by construction on every non-sale line — scheme fee
     #: and adjustment lines have no charge. SettlementPoster's orphan guard runs BEFORE
     #: the projection read for exactly this reason.
@@ -67,8 +72,13 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
     fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     scheme_fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    #: From the matched `settlement_charge`; null while unmatched. Migration 0026.
+    expected_gross_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The acquirer's copy of `network_transaction_id`, for match strategy 2.
+    network_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     match_method: Mapped[str] = mapped_column(
         reconciliation_match_method_enum, nullable=False, server_default="unmatched"
     )
@@ -77,6 +87,36 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    settled_transaction_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_reconciliation_item_acquirer_ref",
+            "batch_id",
+            "acquirer_reference",
+            unique=True,
+        ),
+        Index("ix_reconciliation_item_batch_status", "batch_id", "status"),
+        # arc PERF (0014), re-keyed onto next_attempt_at by 0024 (PAY-2059).
+        Index(
+            "pix_reconciliation_item_retryable",
+            "batch_id",
+            "next_attempt_at",
+            postgresql_where="status in ('pending','retryable')",
+        ),
+        # DELIBERATELY NON-UNIQUE. A charge legitimately appears in two batches:
+        # the original sale and a later chargeback representment.
+        Index("ix_reconciliation_item_charge_id", "charge_id"),
+        Index("ix_reconciliation_item_line_type", "batch_id", "line_type"),
+        Index(
+            "pix_reconciliation_item_settled_txn",
+            "settled_transaction_id",
+            postgresql_where="settled_transaction_id is not null",
+        ),
+    )
+
     def is_terminal(self) -> bool:
         """Whether nothing will move this item without an operator."""
         return self.status in {"settled", "failed", "orphaned"}
