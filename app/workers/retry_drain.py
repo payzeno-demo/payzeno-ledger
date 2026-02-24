@@ -30,3 +30,9 @@ from app.config import Settings
 from app.logging import get_logger
 from app.metrics import metrics
 from app.services.reconciliation.retry import RetryScheduler
+from app.workers.base import JobResult, PeriodicJob
+
+logger = get_logger(__name__)
+
+class RetryDrainJob(PeriodicJob):
+    """Drain the retryable reconciliation backlog, oldest ``next_attempt_at`` first."""

@@ -85,6 +85,9 @@ def build(
 
 
 async def test_retry_item_settles_and_returns_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
     result = await scheduler.retry_item(seeded_item.id, requested_by="ops:noa")
 
     assert result is not None
@@ -133,6 +136,8 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
     inside it — attempt_count, last_attempt_at, status='settling' — is gone. `_mark_retryable`
     therefore opens its OWN session and writes them again. If it did not, the drain could
     never mark anything retryable and would spin on the same item forever.
+    before = sessions_factory.begin_count
+
     poster = StubPoster(
         raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
     )

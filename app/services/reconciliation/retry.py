@@ -52,3 +52,13 @@ class RetryScheduler:
     def __init__(
         self,
         sessions: SessionFactory,
+        items: ReconciliationItemRepository,
+        poster: SettlementPoster,
+        publisher: EventPublisher,
+        clock: Clock,
+        flags: FeatureFlags,
+        locks: AdvisoryLockManager,
+        settings: Settings,
+    ) -> None:
+        self._sessions = sessions
+        self._items = items
