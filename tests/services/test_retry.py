@@ -55,7 +55,20 @@ class FakeLocks(AdvisoryLockManager):
     async def acquire_batch_lock(self, session: Any, batch_id: str) -> None:
         self.batch_locks.append(batch_id)
 
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.raises = raises
+        self._seq = 0
+        self.settled_by_key: dict[str, str] = {}
+
     reconcile_retry_backoff_base_seconds = 30
+    retry_drain_batch_size = 50
+
+
+def build(
+    sessions_factory,
+    items,
+    poster: StubPoster,
     *,
     locks: FakeLocks | None = None,
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
@@ -72,6 +85,20 @@ class FakeLocks(AdvisoryLockManager):
 
 
 async def test_retry_item_settles_and_returns_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    result = await scheduler.retry_item(seeded_item.id, requested_by="ops:noa")
+
+    assert result is not None
+    assert result.status == "settled"
+    assert result.settled_transaction_id == "txn_0001"
+    assert result.attempt_count == 1
+    assert result.last_attempt_at == NOW
+    assert poster.calls == [(seeded_item.id, "retry_scheduler")]
+
+
+async def test_retry_item_passes_its_own_caller_tag(sessions_factory, items, seeded_item) -> None:
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
 
@@ -109,6 +136,8 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
     inside it — attempt_count, last_attempt_at, status='settling' — is gone. `_mark_retryable`
     therefore opens its OWN session and writes them again. If it did not, the drain could
     never mark anything retryable and would spin on the same item forever.
+    before = sessions_factory.begin_count
+
     poster = StubPoster(
         raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
     )

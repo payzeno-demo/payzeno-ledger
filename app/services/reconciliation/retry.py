@@ -41,3 +41,24 @@ class RetryScheduler:
 
     Concurrency: the item row lock in :meth:`_claim_item` excludes other ``RetryScheduler``
     callers, but it does **not** exclude ``ReconciliationService.reconcile_batch``, which
+    serialises on a batch-scoped advisory lock and never row-locks the item. For nine
+    months those were two disjoint mutual-exclusion mechanisms guarding one row, each
+    correct against copies of itself and neither aware of the other — PAY-2041. Both paths
+    now agree on the batch lock, taken **before** the row lock, everywhere. See
+    ``docs/postmortems/2041-duplicate-settlement.md`` and
+    ``docs/adr/0011-lock-ordering-in-the-money-path.md``.
+    """
+
+    def __init__(
+        self,
+        sessions: SessionFactory,
+        items: ReconciliationItemRepository,
+        poster: SettlementPoster,
+        publisher: EventPublisher,
+        clock: Clock,
+        flags: FeatureFlags,
+        locks: AdvisoryLockManager,
+        settings: Settings,
+    ) -> None:
+        self._sessions = sessions
+        self._items = items
