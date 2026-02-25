@@ -60,8 +60,30 @@ class StubScheduler:
         self.raises = raises
         self.calls: list[tuple[str, str | None]] = []
 
+    async def retry_item(self, item_id: str, *, requested_by: str | None = None) -> Any:
+        self.calls.append((item_id, requested_by))
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
+
+class StubReconciler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, int]] = []
+
+    async def reconcile_batch(
+        self, batch_id: str, *, trigger: str = "scheduled", max_items: int = 5000
+    ) -> Any:
+        self.calls.append((batch_id, trigger, max_items))
+        return _run(batch_id)
+
+
+class StubLocks:
+    """`AdvisoryLockManager.try_acquire_batch_lock` — the non-blocking probe.
+
+    Records the session it was handed so a test can prove the probe ran in its own short
+    transaction and not in the one the pass uses.
+    """
 
     def __init__(self, *, acquired: bool = True) -> None:
         self.acquired = acquired
@@ -87,6 +109,21 @@ class StubItemRepository:
         self.rows = rows or {}
         self.reads: list[str] = []
 
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.calls: list[tuple[str | None, str | None]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+# --------------------------------------------------------------------------------------
+# POST /internal/v1/reconciliation/items/{itemId}/retry
+# --------------------------------------------------------------------------------------
+
+
+async def test_retry_returns_the_item_when_it_settles(sessions_factory) -> None:
     settled = make_item(
         item_id="ri_X", batch_id="sb_QK", status="settled", settled_transaction_id="txn_1"
     )
@@ -108,6 +145,8 @@ class StubItemRepository:
 
 
 async def test_a_settled_retry_never_opens_a_session(sessions_factory) -> None:
+    """
+    current = make_item(item_id="ri_X", batch_id="sb_QK", status="settling")
     scheduler = StubScheduler(result=None)
 
     with pytest.raises(SettlementLockedError) as excinfo:
@@ -240,6 +279,21 @@ async def test_start_run_is_409_when_a_sweep_already_holds_the_batch(sessions_fa
     An operator starting a manual run during a scheduled sweep is doing something
     reasonable and should be told so, not paged about. Blocking instead would park the
     request for the length of the pass and time out at the load balancer.
+    """The runbook uses a small bound to reconcile one problem batch without a full pass."""
+    reconciler = StubReconciler()
+
+    await start_run(
+        Body(batch_id="sb_7T", trigger="manual", max_items=50),
+        sessions_factory,
+        StubLocks(),
+        reconciler,
+        CALLER,
+    )
+
+    assert reconciler.calls == [("sb_7T", "manual", 50)]
+
+
+async def test_a_missing_trigger_defaults_to_manual(sessions_factory) -> None:
     """Only the scheduler passes `scheduled`, and it does not come through this route."""
     reconciler = StubReconciler()
 
@@ -260,6 +314,8 @@ async def test_start_run_is_409_when_a_sweep_already_holds_the_batch(sessions_fa
 
 
 async def test_get_run_returns_the_run(sessions_factory) -> None:
+    runs = StubRunRepository({"rr_000001": _run(status="succeeded")})
+
     body = await get_run(sessions_factory, StubRepositories(runs=runs), "rr_000001")
 
     assert body["id"] == "rr_000001"
@@ -286,6 +342,17 @@ async def test_backlog_with_no_filters_returns_everything() -> None:
     """The ops dashboard tile. On the night of PAY-2041 it read 4,113."""
     backlog = StubBacklog({"total_items": 0, "buckets": [], "stale_batches": 0})
 
+    payload = await get_backlog(backlog)
+
+    assert payload["total_items"] == 0
+    assert backlog.calls == [(None, None)]
+
+
+async def test_the_backlog_route_touches_no_session() -> None:
+    """It is polled every few seconds during an incident by everyone watching.
+
+    `BacklogService` owns its own read; giving the route a session as well would double
+    the connection cost of the one screen people refresh most.
     payload = await get_backlog(backlog, None, "sb_QK")
 
     assert payload["total_items"] == 12

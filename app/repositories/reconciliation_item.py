@@ -131,6 +131,7 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         Returns ``None`` rather than raising: ``_claim_item`` treats a missing item as
         "not claimable" and returns ``None`` to its caller, which the route maps onto
         ``409 settlement_locked``. Raising here would turn a lost race into a 500.
+        error_code: str | None = None,
         at: dt.datetime | None = None,
     ) -> ReconciliationItem:
         """Move an item to any non-settled status, recording the error code.
