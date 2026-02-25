@@ -38,3 +38,6 @@ def upgrade() -> None:
     )
 
 
+def downgrade() -> None:
+    op.drop_index("ix_ledger_transaction_idempotency_key", table_name="ledger_transaction")
+    op.drop_column("ledger_transaction", "idempotency_key")
