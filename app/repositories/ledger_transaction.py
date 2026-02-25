@@ -161,3 +161,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         return IdempotencyClaim(
             transaction_id=existing.id,
             created=False,
+            fingerprint_matches=existing.request_fingerprint == request_fingerprint,
+        )
+
+    async def list_by_reference(
+        self,
+        session: AsyncSession,
+        *,
+        reference_type: str,
+        reference_id: str,
+    ) -> list[LedgerTransaction]:
+        """Every transaction pointing at one API-side object, newest first.
