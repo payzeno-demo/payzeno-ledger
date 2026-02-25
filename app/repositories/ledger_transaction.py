@@ -172,3 +172,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         reference_id: str,
     ) -> list[LedgerTransaction]:
         """Every transaction pointing at one API-side object, newest first.
+
+        Drives ``GET /internal/v1/transactions?reference_type=&reference_id=``, which is
+        what payzeno-api's ``UnsettledChargeSweepJob`` calls to self-heal a charge whose
+        ``settlement.completed`` chunk never arrived. Uses
+        ``ix_ledger_transaction_reference``.
+        """
+        stmt = (
+            select(LedgerTransaction)
+            .where(LedgerTransaction.reference_type == reference_type)
+            .where(LedgerTransaction.reference_id == reference_id)
+            .order_by(LedgerTransaction.posted_at.desc())
