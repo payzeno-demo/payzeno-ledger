@@ -32,6 +32,24 @@ logger = get_logger(__name__)
 router = APIRouter(
     prefix="/internal/v1/balances",
     tags=["balances"],
+    dependencies=[Depends(require_internal_service)],
+)
+
+BalanceServiceDep = Annotated[BalanceService, Depends(get_balance_service)]
+
+#: The intervals ``BalanceService.get_balance_history`` knows how to bucket by. Restated
+#: here so a bad ``?interval=`` is a 422 at the edge rather than an empty series.
+_INTERVALS = ("hour", "day")
+
+#: Ninety days of hourly points is 2,160 rows and a chart nobody can read. The console
+#: never asks for more than 30 days; the cap exists for the ops CLI and for the Java
+#: service, which asked for a year once.
+_MAX_HISTORY_DAYS = 400
+
+
+@router.get(
+    "/{merchant_id}",
+    response_model=Balance,
     summary="Current or point-in-time balance for one merchant and currency",
 )
 async def get_balance(
@@ -61,6 +79,7 @@ async def get_balance(
 )
 async def get_balance_history(
     balances: BalanceServiceDep,
+    merchant_id: Annotated[str, Path(min_length=8)],
     currency: Annotated[str, Query(min_length=3, max_length=3)],
     from_: Annotated[datetime, Query(alias="from")],
     to: Annotated[datetime, Query()],
@@ -81,3 +100,25 @@ async def get_balance_history(
         raise ValidationError(
             "`to` must be after `from`", **{"from": from_.isoformat(), "to": to.isoformat()}
         )
+    span_days = (to - from_).days
+    if span_days > _MAX_HISTORY_DAYS:
+        raise ValidationError(
+            f"history window may not exceed {_MAX_HISTORY_DAYS} days",
+            requested_days=span_days,
+        )
+
+    logger.debug(
+        "balance_history_requested",
+        merchant_id=merchant_id,
+        currency=currency,
+        interval=interval,
+        span_days=span_days,
+    )
+    return await balances.get_balance_history(
+        merchant_id=merchant_id,
+        currency=currency.upper(),
+        livemode=livemode,
+        from_=from_,
+        to=to,
+        interval=interval,
+    )
