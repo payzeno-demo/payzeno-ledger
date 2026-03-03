@@ -63,6 +63,7 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         currency: str,
         livemode: bool,
         available_delta: int = 0,
+        pending_delta: int = 0,
         reserved_delta: int = 0,
         disputed_delta: int = 0,
         available_minor = merchant_balance_cache.available_minor + EXCLUDED...`` — the
@@ -77,6 +78,8 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         ``negative_balance_minor`` is derived, not passed: it is the shortfall when
         ``available_minor`` has gone below zero, and computing it anywhere other than
         beside the number it is derived from is how the two disagree.
+        """
+        stamp = computed_at or dt.datetime.now(dt.UTC)
         stmt = pg_insert(MerchantBalanceCache).values(
             merchant_id=merchant_id,
             currency=currency,
