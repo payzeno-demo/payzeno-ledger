@@ -139,6 +139,19 @@ class BalanceService:
             rows = await self._entries.sum_by_bucket(
                 session,
                 to=to,
+                interval=interval,
+            )
+
+        running = 0
+        buckets = []
+        for row in rows:
+            running += row.delta_minor
+            buckets.append(
+                {
+                    "bucket_start": row.bucket_start.isoformat(),
+                    "delta_minor": row.delta_minor,
+                    "balance_minor": running,
+                }
             )
 
         logger.info(
