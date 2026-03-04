@@ -178,6 +178,12 @@ class RunTrialBalanceRequest(BaseModel):
     as_of: datetime | None = None
 
 
+class ApproveAdjustmentRequest(BaseModel):
+    """``POST /internal/v1/ops/adjustments/{request_id}/approve`` — the checker half."""
+
+    approver_note: str = Field(min_length=1, max_length=1000)
+
+
 class ManualMatchRequest(BaseModel):
     """``POST /internal/v1/ops/items/{item_id}/match``.
 
@@ -187,6 +193,25 @@ class ManualMatchRequest(BaseModel):
 
     charge_id: str
     note: str = Field(max_length=1000, default="")
+
+
+class StageInvoiceLinesRequest(BaseModel):
+    """``POST /internal/v1/invoices/lines/stage`` — arc MIG step 4 dual-write."""
+
+    merchant_id: str
+    invoice_public_id: str
+    period_start: date
+    period_end: date
+    currency: str
+    lines: list[InvoiceLine]
+
+
+class StageInvoiceLinesResponse(BaseModel):
+    staged: int
+
+
+class StagedInvoiceLinesResponse(BaseModel):
+    lines: list[dict[str, Any]]
 
 
 class LegacySettlementRecord(BaseModel):

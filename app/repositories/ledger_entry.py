@@ -120,6 +120,7 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         *,
         account_id: str | None = None,
         purpose: str | None = None,
+        direction: str | None = None,
         merchant_id: str | None = None,
         currency: str | None = None,
         livemode: bool | None = None,
@@ -198,6 +199,12 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         increases what Payzeno owes the merchant and must come back positive; summing raw
         ``amount_minor`` would report a payout as an increase in the balance it just
         spent.
+        """
+        signed = func.sum(
+            case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
+        ) - func.sum(
+            case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
+        )
         stmt = (
             select(Account.type, func.coalesce(signed, 0))
             .join(Account, Account.id == LedgerEntry.account_id)
@@ -259,6 +266,17 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         *,
         currency: str,
         livemode: bool | None = None,
+        as_of: dt.datetime | None = None,
+    ) -> TrialBalanceTotals:
+        """Invariant (2) of `data-model.md` §6: debits equal credits, per currency.
+
+        Grouped by ``livemode`` as well as currency, because invariant (9) says no
+        transaction may span both and this is the cheapest place to notice that it has.
+
+        Worth stating plainly, since the postmortem does: **a duplicate settlement passes
+        this check.** Both copies are internally balanced. That is why invariant (1) —
+        exactly one ``settle`` transaction per settled charge — had to be added
+        separately, as PAY-2054.
         """
         debit = func.sum(
             case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
@@ -266,6 +284,17 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
         credit = func.sum(
             case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
         )
+        stmt = (
+            select(LedgerEntry.livemode, func.coalesce(debit, 0), func.coalesce(credit, 0))
+            .where(LedgerEntry.currency == currency)
+            .group_by(LedgerEntry.livemode)
+            .order_by(LedgerEntry.livemode)
+        )
+        if livemode is not None:
+            stmt = stmt.where(LedgerEntry.livemode == livemode)
+        if as_of is not None:
+            stmt = stmt.where(LedgerEntry.created_at <= as_of)
+
         rows = tuple(
             TrialBalanceRow(
                 currency=currency,

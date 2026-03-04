@@ -131,6 +131,7 @@ class BalanceService:
             account = await self._accounts.find_one(
                 session,
                 merchant_id=merchant_id,
+                type_="merchant_payable",
                 livemode=livemode,
             )
             if account is None:
@@ -138,7 +139,21 @@ class BalanceService:
 
             rows = await self._entries.sum_by_bucket(
                 session,
+                account_id=account.id,
                 to=to,
+                interval=interval,
+            )
+
+        running = 0
+        buckets = []
+        for row in rows:
+            running += row.delta_minor
+            buckets.append(
+                {
+                    "bucket_start": row.bucket_start.isoformat(),
+                    "delta_minor": row.delta_minor,
+                    "balance_minor": running,
+                }
             )
 
         logger.info(
