@@ -75,7 +75,10 @@ class SepaPayoutInitiator(PayoutInitiator):
         logger.info(
             "sepa_payout_initiated",
             payout_id=payout.id,
+            rail_reference=rail_reference,
             bic=bank.bic,
         )
         return InitiationResult(
+            rail_reference=rail_reference,
+            submitted_at=submitted_at,
         )
