@@ -73,14 +73,22 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     __tablename__ = "payout"
     entity_name: ClassVar[str] = "payout"
 
+    #: payzeno-api's `bank_account.id`. Resolved through `bank_account_projection` —
+    #: there is no ledger→api route on the payout path.
+    bank_account_id: Mapped[str] = mapped_column(Text, nullable=False)
+
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     status: Mapped[str] = mapped_column(
         payout_status_enum, nullable=False, server_default="scheduled"
     )
     method: Mapped[str] = mapped_column(payout_method_enum, nullable=False)
 
+    #: Banking-calendar dates, not instants. `BankingCalendar.next_business_day` computes
+    #: `available_on` from `settlement_date + merchant.payout_delay_days`.
+    available_on: Mapped[dt.date] = mapped_column(Date, nullable=False)
     arrival_estimate: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
+    statement_descriptor: Mapped[str] = mapped_column(String(22), nullable=False)
     ledger_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
@@ -90,6 +98,11 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     initiated_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    returned_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     def exceeds_rail_limit(self) -> bool:
         """Whether the amount is over the rail's per-transfer ceiling.
 
