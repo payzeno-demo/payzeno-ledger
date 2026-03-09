@@ -88,6 +88,24 @@ class PayoutRepository(BaseRepository[Payout]):
         checks this to return a friendly ``payout_blocked`` instead of letting the insert
         raise an ``IntegrityError`` the caller cannot interpret — but the check is a
         courtesy and the index is the guarantee, in that order.
+        """
+        stmt = (
+            select(Payout)
+            .where(Payout.merchant_id == merchant_id)
+            .where(Payout.currency == currency)
+            .where(Payout.livemode == livemode)
+            .where(Payout.status.in_(IN_FLIGHT_STATUSES))
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def mark_in_transit(
+        self,
+        session: AsyncSession,
+        payout_id: str,
+        *,
+        at: dt.datetime,
+        rail_reference: str | None = None,
+    ) -> Payout:
         """Record that the rail accepted the instruction."""
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "in_transit"
