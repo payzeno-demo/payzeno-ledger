@@ -113,6 +113,7 @@ class PayoutCalculator:
             id=new_id("po"),
             merchant_id=merchant_id,
             amount_minor=requested,
+            status="scheduled",
             statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
             livemode=True,
         )
@@ -125,6 +126,10 @@ class PayoutCalculator:
             created_by="system",
             merchant_id=merchant_id,
             correlation_id=payout.id,
+            session=session,
+        )
+        logger.info(
+            "payout_created",
             payout_id=payout.id,
             correlation_id=payout.id,
             session=session,
@@ -180,12 +185,16 @@ class PayoutCalculator:
                 "failed_at": payout.failed_at.isoformat(),
             },
             correlation_id=payout.id,
+            failure_code=failure_code,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
             session=session,
             payout_id=returned.id,
             purpose="payout_reversal",
             merchant_id=payout.merchant_id,
+            currency=payout.currency,
+            livemode=payout.livemode,
+            created_by="system",
             request_fingerprint=ledger_key("payoutrevfp", payout.id, reason),
         )
         return posted.transaction.id

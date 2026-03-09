@@ -51,5 +51,10 @@ class AchPayoutInitiator(PayoutInitiator):
         logger.info(
             "ach_payout_initiated",
             payout_id=payout.id,
+            arrival = self._calendar.next_business_day(arrival, payout.currency, self.method)
+        rail_reference = f"SDA{self._build_reference(payout, bank)}"
+        logger.info(
+            "same_day_ach_payout_initiated",
             payout_id=payout.id,
+            rail_reference=rail_reference,
         )
