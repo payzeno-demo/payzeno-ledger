@@ -66,6 +66,7 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         pending_delta: int = 0,
         reserved_delta: int = 0,
         disputed_delta: int = 0,
+        last_transaction_id: str | None = None,
         available_minor = merchant_balance_cache.available_minor + EXCLUDED...`` — the
         arithmetic happens **in the database**, not in Python.
 
@@ -120,6 +121,8 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
     async def list_stale(
         self,
         session: AsyncSession,
+        *,
+        limit: int = 500,
         """
         stmt = (
             select(MerchantBalanceCache)
