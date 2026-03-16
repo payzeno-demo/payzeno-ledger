@@ -132,6 +132,7 @@ class BalanceService:
                 session,
                 merchant_id=merchant_id,
                 type_="merchant_payable",
+                currency=currency,
                 livemode=livemode,
             )
             if account is None:
