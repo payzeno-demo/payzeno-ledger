@@ -132,6 +132,7 @@ class BalanceService:
                 session,
                 merchant_id=merchant_id,
                 type_="merchant_payable",
+                currency=currency,
                 livemode=livemode,
             )
             if account is None:
@@ -140,6 +141,7 @@ class BalanceService:
             rows = await self._entries.sum_by_bucket(
                 session,
                 account_id=account.id,
+                from_=from_,
                 to=to,
                 interval=interval,
             )
