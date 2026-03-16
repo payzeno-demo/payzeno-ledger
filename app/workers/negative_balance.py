@@ -105,6 +105,7 @@ class NegativeBalanceJob(PeriodicJob):
                 # the same query this job does.
                 logger.warning(
                     "negative_balance_pull_skipped",
+                    merchant_id=merchant_id,
                     currency=currency,
                     owed_minor=owed_minor,
                     code=exc.code,
@@ -114,7 +115,10 @@ class NegativeBalanceJob(PeriodicJob):
             except PayzenoLedgerError as exc:
                 logger.error(
                     "negative_balance_pull_failed",
+                    merchant_id=merchant_id,
+                    currency=currency,
                     owed_minor=owed_minor,
+                    code=exc.code,
                 )
                 metrics.increment("NegativeBalancePullFailed", code=exc.code)
                 continue
