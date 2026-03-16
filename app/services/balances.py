@@ -140,6 +140,7 @@ class BalanceService:
             rows = await self._entries.sum_by_bucket(
                 session,
                 account_id=account.id,
+                from_=from_,
                 to=to,
                 interval=interval,
             )
