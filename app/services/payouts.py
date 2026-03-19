@@ -108,6 +108,90 @@ class PayoutCalculator:
             session,
             merchant_id=merchant_id,
             livemode=True,
+            as_of=cutoff,
+        )
+        payable = posted.get("merchant_payable", 0)
+        reserved = posted.get("merchant_reserve", 0)
+        disputed = posted.get("merchant_disputed", 0)
+        in_flight = await self._payouts.sum_in_flight(
+            session, merchant_id=merchant_id, currency=currency
+        )
+        available = payable - reserved - disputed - in_flight
+        return AvailableFunds(
+            posted_minor=payable,
+            in_flight_minor=in_flight,
+        )
+
+
+class PayoutService:
+    """Creates, cancels and settles payouts."""
+
+    def __init__(
+        self,
+        locks: AdvisoryLockManager,
+        payouts: PayoutRepository,
+        merchants: MerchantProjectionRepository,
+        banks: BankAccountProjectionRepository,
+        calculator: PayoutCalculator,
+        calendar: BankingCalendar,
+        ledger: LedgerPoster,
+        initiators: dict[str, PayoutInitiator],
+        publisher: EventPublisher,
+        flags: FeatureFlags,
+        clock: Clock,
+    ) -> None:
+        self._locks = locks
+        self._payouts = payouts
+        self._merchants = merchants
+        self._banks = banks
+        self._calculator = calculator
+        self._calendar = calendar
+        self._ledger = ledger
+        self._initiators = initiators
+        self._publisher = publisher
+        self._flags = flags
+        self._clock = clock
+
+    async def create_payout(
+        self, session: AsyncSession, *, merchant_id: str, req: dict
+    ) -> Payout:
+        currency = str(req.get("currency", "")).upper()
+        if not currency:
+            raise ValidationError("currency is required", merchant_id=merchant_id)
+        method = str(req.get("method") or "ach")
+        if method == "same_day_ach" and not self._flags.enabled(
+            "payout_same_day_ach", merchant_id=merchant_id
+        ):
+            raise PayoutBlockedError(
+                "same-day ACH is not enabled", merchant_id=merchant_id, method=method
+            )
+
+        await self._locks.acquire_merchant_currency_lock(session, merchant_id, currency)
+
+        merchant = await self._merchants.get_or_raise(session, merchant_id)
+        if merchant.status in BLOCKED_MERCHANT_STATUSES:
+            raise PayoutBlockedError(
+                f"merchant is {merchant.status}",
+                merchant_id=merchant_id,
+                status=merchant.status,
+            )
+
+        cutoff = self._clock.now()
+        funds = await self._calculator.compute_available_detail(
+            session, merchant_id, currency, cutoff
+        )
+        requested = int(req.get("amount_minor") or funds.amount.amount_minor)
+        if funds.amount.amount_minor <= 0 or requested > funds.amount.amount_minor:
+            raise InsufficientBalanceError(
+                "no payable balance",
+                merchant_id=merchant_id,
+                currency=currency,
+                available_minor=funds.amount.amount_minor,
+                requested_minor=requested,
+            )
+
+        bank_account_id = req.get("bank_account_id")
+        if bank_account_id:
             bank = await self._banks.get_or_raise(session, str(bank_account_id))
         else:
             id=new_id("po"),
@@ -121,6 +205,7 @@ class PayoutCalculator:
 
         posted = await self._ledger.post(
             session,
+            idempotency_key=ledger_key("payout", merchant_id, payout.id),
             currency=currency,
             reference_id=payout.id,
             created_by="system",
@@ -185,6 +270,11 @@ class PayoutCalculator:
                 "failed_at": payout.failed_at.isoformat(),
             },
             correlation_id=payout.id,
+            session=session,
+        )
+        logger.warning(
+            "payout_failed",
+            payout_id=payout_id,
             failure_code=failure_code,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
