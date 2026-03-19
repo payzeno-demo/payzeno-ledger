@@ -117,6 +117,10 @@ class CollectingItemRepository:
     def __init__(self) -> None:
         self.added: list[Any] = []
 
+    async def add_all(self, session: Any, objs: list[Any]) -> list[Any]:
+        self.added.extend(objs)
+        return objs
+
     async def add(self, session: Any, obj: Any) -> Any:
         self.added.append(obj)
         return obj
@@ -149,6 +153,15 @@ def _importer(sessions_factory, processor: StubProcessor):
 
 
 async def test_import_file_fetches_from_the_acquirer(sessions_factory) -> None:
+    processor = StubProcessor()
+    service, _, _ = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert processor.fetches == [("worldflow", PROCESSING_DATE)]
+
+
+async def test_import_file_creates_one_item_per_line(sessions_factory) -> None:
     processor = StubProcessor()
     service, _, items = _importer(sessions_factory, processor)
 
