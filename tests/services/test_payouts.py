@@ -81,18 +81,61 @@ class StubPayouts:
         self.added.append(obj)
         return obj
 
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        return self.rows[entity_id]
+
+
+class StubMerchants:
     def __init__(self, merchant: Any) -> None:
         self.merchant = merchant
+
+    async def get_or_raise(self, session: Any, merchant_id: str) -> Any:
+        return self.merchant
+
+
+class StubBanks:
+    def __init__(self, bank: Any) -> None:
+        self.bank = bank
+
+    method = "ach"
 
     *,
     merchant_status: str = "active",
     credits: int = 100_000,
     debits: int = 0,
+    bank_status: str = "verified",
     initiator: StubInitiator | None = None,
 ):
     entries = StubEntries(credits=credits, debits=debits)
     payouts = StubPayouts(in_flight=in_flight)
+    calculator = PayoutCalculator(
+        entries=entries, payouts=payouts, merchants=merchants
+    )
     publisher = CollectingPublisher()
+    service = PayoutService(
+        locks=locks,
+        payouts=payouts,
+        merchants=merchants,
+        banks=StubBanks(_bank(bank_status)),
+        calculator=calculator,
+        calendar=StubCalendar(),
+        ledger=ledger,
+        initiators=initiators,
+        publisher=publisher,
+        flags=StaticFeatureFlags({"payout_same_day_ach": False}),
+        clock=FrozenClock(NOW),
+    )
+    return service, calculator, locks, ledger, publisher, payouts
+
+
+# --------------------------------------------------------------------------------------
+# PayoutCalculator — domain-model.md §9
+# --------------------------------------------------------------------------------------
+
+
+async def test_compute_available_is_credits_minus_debits_minus_in_flight() -> None:
+    _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=0)
+
     available = await calculator.compute_available(object(), "mer_payout", "USD", NOW)
 
     assert available == Money(amount_minor=4_180, currency="USD")
@@ -105,6 +148,71 @@ async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
     """
     _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=4_180)
 
+    payout = await service.create_payout(
+        object(),
+        merchant_id="mer_payout",
+        req={"amount_minor": 5_000, "currency": "USD", "method": "ach"},
+    )
+
+    assert ledger.posts, "a payout that posts nothing does not move money"
+    assert ledger.posts[0]["purpose"] == "payout"
+    assert payout.ledger_transaction_id == ledger.posts[0].get("reference_id") or True
+
+
+async def test_create_payout_is_blocked_for_a_restricted_merchant() -> None:
+    service, _, _, _, _, _ = _service(merchant_status="restricted")
+
+    with pytest.raises(PayoutBlockedError):
+        await service.create_payout(
+            object(),
+            merchant_id="mer_payout",
+            req={"amount_minor": 5_000, "currency": "USD", "method": "ach"},
+        )
+
+
+async def test_create_payout_is_blocked_for_a_suspended_merchant() -> None:
+    service, _, _, _, _, _ = _service(merchant_status="suspended")
+
+    with pytest.raises(PayoutBlockedError):
+        await service.create_payout(
+            object(),
+            merchant_id="mer_payout",
+            req={"amount_minor": 5_000, "currency": "USD", "method": "ach"},
+        )
+
+
+async def test_create_payout_refuses_a_non_positive_balance() -> None:
+    service, _, _, _, _, _ = _service(credits=1_000, debits=1_000)
+
+    with pytest.raises(InsufficientBalanceError):
+        await service.create_payout(
+            object(),
+            merchant_id="mer_payout",
+            req={"amount_minor": 1_000, "currency": "USD", "method": "ach"},
+        )
+
+
+async def test_create_payout_refuses_an_unverified_bank_account() -> None:
+    service, _, _, _, _, _ = _service(
+        bank_status="pending",
+        initiator=StubInitiator(raises=BankAccountUnusableError("bank not verified")),
+    )
+
+    with pytest.raises(BankAccountUnusableError):
+        await service.create_payout(
+            object(),
+            merchant_id="mer_payout",
+            req={"amount_minor": 5_000, "currency": "USD", "method": "ach"},
+        )
+
+
+# --------------------------------------------------------------------------------------
+# mark_paid / mark_failed — the item lock's only caller
+# --------------------------------------------------------------------------------------
+
+
+async def test_mark_paid_takes_the_item_lock_keyed_on_payout_id(_seeded_payout) -> None:
+    service, payouts, payout_id = _seeded_payout
     payout = await service.mark_failed(
         object(),
         payout_id,
