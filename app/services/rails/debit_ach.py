@@ -99,9 +99,18 @@ class AchPayoutPuller:
         posted = await self._ledger.post(
             session,
             idempotency_key=ledger_key("debitpull", merchant_id, rail_reference),
+            merchant_id=merchant_id,
+            currency=currency,
+            reference_type="merchant",
+            reference_id=merchant_id,
             created_by="system",
             merchant_id=merchant_id,
             amount_minor=capped,
+            reason=reason,
+            transaction_id=posted.transaction.id,
+        )
+        return DebitPullResult(
+            rail_reference=rail_reference,
             amount_minor=capped,
             effective_date=effective,
             transaction_id=posted.transaction.id,

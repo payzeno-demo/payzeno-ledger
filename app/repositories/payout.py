@@ -67,6 +67,9 @@ class PayoutRepository(BaseRepository[Payout]):
         ``available_on`` is a banking-calendar date computed by
         ``BankingCalendar.next_business_day`` — not ledger booking time, which is a
         different thing and would pay merchants on bank holidays.
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[Payout]:
         """One merchant's payouts, newest first. Uses ``ix_payout_merchant_created``."""
         stmt = select(Payout).where(Payout.merchant_id == merchant_id)
         if status is not None:
@@ -170,6 +173,25 @@ class PayoutRepository(BaseRepository[Payout]):
         failure_code: str,
         failure_message: str,
         reversal_transaction_id: str,
+        """
+        payout = await self.get_or_raise(session, payout_id)
+        payout.status = "returned"
+        payout.failure_code = failure_code
+        payout.failure_message = failure_message
+        payout.reversal_transaction_id = reversal_transaction_id
+        payout.returned_at = at or dt.datetime.now(dt.UTC)
+        await session.flush()
+        return payout
+
+    async def mark_canceled(
+        self, session: AsyncSession, payout_id: str, *, at: dt.datetime
+    ) -> Payout:
+        """Cancel a payout that has not left yet.
+
+        Only legal from ``scheduled``. Once the rail has it, cancelling is a lie — the
+        money is in the banking system and the only honest outcomes are ``paid``,
+        ``failed`` or ``returned``. The service enforces the guard; this method records
+        the decision and stamps the time.
         """
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "canceled"

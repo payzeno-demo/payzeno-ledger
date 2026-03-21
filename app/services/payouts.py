@@ -118,6 +118,7 @@ class PayoutCalculator:
         )
         available = payable - reserved - disputed - in_flight
         return AvailableFunds(
+            amount=Money(amount_minor=available, currency=currency),
             posted_minor=payable,
             in_flight_minor=in_flight,
         )
@@ -216,6 +217,8 @@ class PayoutService:
         logger.info(
             "payout_created",
             payout_id=payout.id,
+            merchant_id=merchant_id,
+            amount_minor=requested,
             correlation_id=payout.id,
             session=session,
         )
@@ -279,11 +282,17 @@ class PayoutService:
             failure_message=failure_message,
             reversal_transaction_id=reversal,
             session=session,
+            livemode=returned.livemode,
+        )
+        logger.warning(
+            "payout_returned",
             payout_id=returned.id,
+            failure_code=failure_code,
             purpose="payout_reversal",
             merchant_id=payout.merchant_id,
             currency=payout.currency,
             livemode=payout.livemode,
+            reference_type="payout",
             created_by="system",
             request_fingerprint=ledger_key("payoutrevfp", payout.id, reason),
         )
