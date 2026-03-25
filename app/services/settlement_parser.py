@@ -112,6 +112,7 @@ class WorldflowCsvParser(SettlementFileParser):
                     scheme_fee_minor=_int(row.get("scheme_fee_minor")),
                     net_minor=_int(row.get("net_minor")),
                     acquirer=self.acquirer,
+                    length=len(record),
                     expected=self.RECORD_LENGTH,
                 )
 
