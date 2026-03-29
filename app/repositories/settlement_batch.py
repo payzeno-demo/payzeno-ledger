@@ -101,6 +101,12 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
 
         One acquirer files one batch per currency per day, so this is usually five rows.
         The ops CLI prints it as a table when someone asks "did yesterday land".
+        """
+        stmt = select(SettlementBatch).where(
+            SettlementBatch.processing_date == processing_date
+        )
+        if acquirer is not None:
+            stmt = stmt.where(SettlementBatch.acquirer == acquirer)
         stmt = stmt.order_by(SettlementBatch.currency)
         return list((await session.execute(stmt)).scalars().all())
 
@@ -119,6 +125,31 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
     async def mark_status(
         self, session: AsyncSession, batch_id: str, *, status: str
     ) -> SettlementBatch:
+        """Move a batch along its state machine, stamping the matching timestamp."""
+        batch = await self.get_or_raise(session, batch_id)
+        batch.status = status
+        await session.flush()
+        return batch
+
+    async def mark_reconciled(
+        self,
+        session: AsyncSession,
+        batch_id: str,
+        *,
+        posted_total_minor: int,
+        fully_settled: bool,
+        at: dt.datetime,
+    ) -> SettlementBatch:
+        """Close out a reconciliation pass over one batch.
+
+        ``fully_settled`` decides between ``reconciled`` and ``partially_reconciled``.
+        The partial state is not a failure — items land in ``retryable`` for entirely
+        ordinary acquirer 504s — and the batch stays eligible for the next sweep, which is
+        how a backlog survives long enough for a drain to be working the same rows.
+
+        ``posted_total_minor`` is set rather than accumulated here: the pass knows its own
+        total and the batch may have been partially posted by an earlier pass, so adding
+        would double-count everything settled before this one.
         """
         batch = await self.get_or_raise(session, batch_id)
         batch.status = "funded"
