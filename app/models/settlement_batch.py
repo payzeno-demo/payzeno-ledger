@@ -57,6 +57,14 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
         BigInteger, nullable=False, server_default="0"
     )
     item_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(
+        settlement_batch_status_enum, nullable=False, server_default="open"
+    )
+
+    opened_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reconciled_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
