@@ -27,6 +27,33 @@ Direction = Literal["debit", "credit"]
 
 
 @dataclass(frozen=True, slots=True)
+class PostingContext:
+    """Everything a rule needs to build its legs, and nothing it could mutate.
+
+    ``fee_minor`` is what the **acquirer** kept — an expense, not revenue.
+    ``platform_fee_bps`` / ``platform_fee_fixed_minor`` are Payzeno's own take, sourced
+    from ``settlement_charge`` (denormalised at authorisation time) rather than from
+    ``merchant_projection``, so a later merchant change cannot retroactively alter an
+    in-flight settlement.
+    """
+
+    merchant_id: str | None
+    currency: str
+    livemode: bool
+    gross_minor: int
+    fee_minor: int
+    net_minor: int
+    interchange_minor: int
+    scheme_fee_minor: int
+    reserve_bps: int
+    platform_fee_bps: int
+    platform_fee_fixed_minor: int
+
+    def money(self, amount_minor: int) -> Money:
+        """Attach this context's currency to a bare minor amount."""
+        return Money(amount_minor=amount_minor, currency=self.currency)
+
+
 class PostingLine:
     """One leg of a balanced transaction.
 

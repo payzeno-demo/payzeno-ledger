@@ -76,8 +76,89 @@ class UpsertingBanks(BankAccountProjectionRepository):
         self.rejected: list[str] = []
 
     async def upsert_if_newer(self, session: Any, projection: Any) -> bool:
+        existing = self.rows.get(projection.bank_account_id)
+        if existing is not None and existing.source_occurred_at >= projection.source_occurred_at:
+            self.rejected.append(projection.bank_account_id)
+            return False
+        self.rows[projection.bank_account_id] = projection
+        return True
+
+    async def clear_other_defaults(self, session: Any, **kwargs: Any) -> None:
+        self.cleared.append(kwargs)
+
+
+class BootstrappingResolver(AccountResolver):
+    def __init__(self) -> None:
+        self.bootstrapped: list[tuple[str, str, bool]] = []
+
+    async def bootstrap(
+        self, session: Any, *, merchant_id: str, currency: str, livemode: bool
+    ) -> list[Any]:
+        self.bootstrapped.append((merchant_id, currency, livemode))
+        return []
+
+
+def _created_payload(**overrides: Any) -> dict[str, Any]:
+    payload = {
+        "merchant_id": "mer_c1",
+        "display_name": "Loomcraft Interiors",
+        "country": "US",
+        "default_currency": "USD",
+        "status": "active",
+        "risk_tier": "standard",
+        "reserve_bps": 0,
+        "reserve_hold_days": 0,
+        "pricing_model": "blended",
+        "platform_fee_bps": 290,
+        "platform_fee_fixed_minor": 30,
+        "payout_delay_days": 2,
+        "settlement_tolerance_minor": 100,
+        "capture_at_settlement": False,
+        "payout_schedule": "daily",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _updated_payload(**overrides: Any) -> dict[str, Any]:
+    payload = _created_payload()
+    payload.pop("country")
+    payload.pop("default_currency")
+    payload["changed_by"] = "usr_ops_1"
+    payload.update(overrides)
+    return payload
+
+
+# --------------------------------------------------------------------------------------
+# merchant.created
+# --------------------------------------------------------------------------------------
+
+
+async def test_created_projects_the_merchant() -> None:
+    merchants = UpsertingMerchants()
+
+    await handle_merchant_created(
+        object(),
+        _created_payload(),
         resolver=BootstrappingResolver(),
         clock=FrozenClock(NOW),
+        livemode=True,
+    )
+
+    assert merchants.rows["mer_c1"].display_name == "Loomcraft Interiors"
+
+
+async def test_created_bootstraps_the_account_set() -> None:
+    """Through `AccountResolver`, not a local INSERT.
+
+    Three callers create accounts and all three go through one writer, which is why
+    `uq_account_merchant_type_currency_livemode` has never been violated.
+    """
+    resolver = BootstrappingResolver()
+
+    await handle_merchant_created(
+        object(),
+        _created_payload(),
         merchants=UpsertingMerchants(),
         livemode=True,
     )
@@ -116,6 +197,8 @@ async def test_updated_is_the_only_way_capture_at_settlement_becomes_true() -> N
     await handle_merchant_created(
         object(),
         _created_payload(capture_at_settlement=False),
+        merchants=merchants,
+        resolver=BootstrappingResolver(),
         clock=FrozenClock(NOW),
         event_id="evt_c1",
         livemode=True,
@@ -124,10 +207,34 @@ async def test_updated_is_the_only_way_capture_at_settlement_becomes_true() -> N
     await handle_merchant_updated(
         object(),
         _updated_payload(capture_at_settlement=True),
+        merchants=merchants,
         clock=FrozenClock(NOW),
         event_id="evt_u1",
+        occurred_at=NOW,
+        livemode=True,
+    )
+
+    assert merchants.rows["mer_c1"].capture_at_settlement is True
+
+
+async def test_updated_preserves_the_immutable_fields_from_the_existing_row() -> None:
+    """`country` and `default_currency` are not on the update payload.
+
+    Rebuilding the projection from the payload alone nulls them, and a null
+    `default_currency` means `handle_merchant_created`'s bootstrap can never be repeated.
+    """
+    merchants = UpsertingMerchants()
+    await handle_merchant_created(
+        object(),
+        _created_payload(country="GB", default_currency="GBP"),
         merchants=merchants,
         occurred_at=EARLIER,
+        livemode=True,
+    )
+
+    await handle_merchant_updated(
+        object(),
+        _updated_payload(display_name="Loomcraft Ltd"),
         clock=FrozenClock(NOW),
         event_id="evt_u1",
         livemode=True,
@@ -171,7 +278,9 @@ async def test_status_change_applies_to_the_projection() -> None:
         _created_payload(),
         event_id="evt_c1",
         occurred_at=EARLIER,
+        merchants=merchants,
         clock=FrozenClock(NOW),
+        event_id="evt_s1",
         merchants=merchants,
         event_id="evt_s2",
         occurred_at=NOW,
@@ -209,6 +318,7 @@ async def test_a_verified_account_is_projected_as_verified() -> None:
     await handle_bank_account_verified(
         object(),
         _bank_payload(),
+        banks=banks,
         clock=FrozenClock(NOW),
         event_id="evt_b1",
         occurred_at=NOW,
@@ -216,6 +326,7 @@ async def test_a_verified_account_is_projected_as_verified() -> None:
         event_id="evt_b1",
         occurred_at=NOW,
         clock=FrozenClock(NOW),
+        event_id="evt_b2",
         occurred_at=NOW,
         livemode=True,
     )
@@ -232,6 +343,22 @@ async def test_a_non_default_account_does_not_clear_anything() -> None:
         _bank_payload(bank_account_id="ba_3", is_default=False),
         clock=FrozenClock(NOW),
         occurred_at=NOW,
+        livemode=True,
+    )
+
+    assert banks.cleared == []
+
+
+async def test_a_stale_bank_replay_is_ignored() -> None:
+    banks = UpsertingBanks()
+    common = {"banks": banks, "clock": FrozenClock(NOW), "livemode": True}
+
+    await handle_bank_account_verified(
+        object(), _bank_payload(), event_id="evt_new", occurred_at=NOW, **common
+    )
+    await handle_bank_account_verified(
+        object(),
+        _bank_payload(account_number_token="tok_old"),
         event_id="evt_old",
         occurred_at=EARLIER,
         **common,
