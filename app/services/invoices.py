@@ -67,7 +67,10 @@ class InvoiceStagingService:
                 merchant_id=merchant_id,
                 line_count=len(lines),
                 invoice_public_id=invoice_public_id,
+                period_start=period_start.isoformat(),
                 merchant_id=merchant_id,
+                invoice_public_id=invoice_public_id,
+                period_start=period_start,
                 currency=currency,
                 description=str(line.get("description", ""))[:255],
             }

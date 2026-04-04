@@ -86,6 +86,7 @@ async def stage_lines(
         staged = await invoices.stage_lines(
             session,
             merchant_id=body.merchant_id,
+            period_start=body.period_start,
             lines=lines,
         )
     logger.info(
