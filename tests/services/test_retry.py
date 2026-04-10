@@ -72,6 +72,7 @@ def build(
     *,
     locks: FakeLocks | None = None,
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
+    lock_manager = locks or FakeLocks()
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
@@ -148,6 +149,7 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
     seeded_item.status = "retryable"
 
     await scheduler.retry_item(seeded_item.id)
+    poster = StubPoster()
     scheduler = RetryScheduler(
         sessions=sessions_factory,
         items=items,
@@ -188,3 +190,11 @@ async def test_drain_respects_its_limit(sessions_factory, items, batches) -> Non
             )
         )
 
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
+
+    assert await scheduler.drain(limit=200) == 0
+    assert poster.calls == []
+
+
+async def test_drain_of_an_empty_backlog_is_zero(sessions_factory, items) -> None:

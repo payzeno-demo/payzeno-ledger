@@ -212,3 +212,15 @@ async def retry_item(
 @router.get(
     "/backlog",
     response_model=ReconciliationBacklog,
+    summary="How much settlement work is outstanding",
+)
+async def get_backlog(
+    backlog: BacklogDep,
+    batch_id: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    """Drives the ops dashboard tile and the ``LedgerReconciliationBacklog`` alarm.
+
+    On the night of PAY-2041 this is the number that went from single digits to 4,113,
+    and it is the one an operator refreshes while the drain works through it.
+    """
+    return await backlog.get_backlog(currency=currency, batch_id=batch_id)
