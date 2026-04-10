@@ -109,10 +109,59 @@ class StubItemRepository:
         self.rows = rows or {}
         self.reads: list[str] = []
 
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        self.reads.append(entity_id)
+        try:
+            return self.rows[entity_id]
+        except KeyError:
+            raise ReconciliationItemNotFoundError(entity_id=entity_id) from None
+
+
+class StubRepositories:
+    """The container's repository namespace, with the two attributes this router reaches."""
+
+    def __init__(
+        self,
+        *,
+        items: StubItemRepository | None = None,
+        runs: StubRunRepository | None = None,
+    ) -> None:
+        self.reconciliation_items = items or StubItemRepository()
+        self.reconciliation_runs = runs or StubRunRepository()
+
+
+class StubBacklog:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload
         self.calls: list[tuple[str | None, str | None]] = []
 
+    async def get_backlog(
+        self, *, currency: str | None = None, batch_id: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append((currency, batch_id))
+        return self.payload
+
+
+def _run(batch_id: str = "sb_QK", status: str = "running") -> Any:
+    return type(
+        "ReconciliationRun",
+        (),
+        {
+            "id": "rr_000001",
+            "batch_id": batch_id,
+            "trigger": "manual",
+            "status": status,
+            "items_total": 4_113,
+            "items_settled": 0,
+            "items_failed": 0,
+            "started_at": NOW,
+            "finished_at": None,
+            "error_summary": None,
+        },
+    )()
+
+
+class Body:
     def __init__(self, **kwargs: Any) -> None:
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -145,6 +194,27 @@ async def test_retry_returns_the_item_when_it_settles(sessions_factory) -> None:
 
 
 async def test_a_settled_retry_never_opens_a_session(sessions_factory) -> None:
+    """The re-read is only for the 409 path. The happy path is one service call."""
+    scheduler = StubScheduler(result=make_item(item_id="ri_X", batch_id="sb_QK"))
+
+    await retry_item(
+        Body(requested_by="usr_ops_1"),
+        sessions_factory,
+        scheduler,
+        StubRepositories(),
+        CALLER,
+        "ri_X",
+    )
+
+    assert sessions_factory.begin_count == 0
+
+
+async def test_retry_maps_none_onto_settlement_locked(sessions_factory) -> None:
+    """The whole point of the `None` contract.
+
+    Before PAY-2043 this was reachable only when the item was already settled. After it,
+    it is what happens every time a drain loses the batch lock to a running sweep — which,
+    by `interfaces.md` §3.2's own note, is most of every fifteen-minute window.
     """
     current = make_item(item_id="ri_X", batch_id="sb_QK", status="settling")
     scheduler = StubScheduler(result=None)
@@ -257,6 +327,25 @@ async def test_an_unknown_item_is_a_404_not_a_409(sessions_factory) -> None:
 async def test_start_run_returns_the_serialised_run(sessions_factory) -> None:
     reconciler = StubReconciler()
 
+    body = await start_run(
+        Body(batch_id="sb_QK", trigger="manual", max_items=None),
+        sessions_factory,
+        StubLocks(),
+        reconciler,
+        CALLER,
+    )
+
+    assert body["batch_id"] == "sb_QK"
+    assert body["object"] == "reconciliation_run"
+    assert reconciler.calls == [("sb_QK", "manual", 5000)]
+
+
+async def test_start_run_probes_the_batch_lock_first(sessions_factory) -> None:
+    """The probe is a short transaction of its own, and it is released when it closes.
+
+    `pg_advisory_xact_lock` dies with its transaction, so the probe cannot hand the lock
+    to `reconcile_batch` — the pass takes its own on its guard session. A probe that held
+    the lock would deadlock the pass against itself.
     """
     locks = StubLocks()
 
@@ -279,6 +368,24 @@ async def test_start_run_is_409_when_a_sweep_already_holds_the_batch(sessions_fa
     An operator starting a manual run during a scheduled sweep is doing something
     reasonable and should be told so, not paged about. Blocking instead would park the
     request for the length of the pass and time out at the load balancer.
+    """
+    reconciler = StubReconciler()
+
+    with pytest.raises(SettlementLockedError) as excinfo:
+        await start_run(
+            Body(batch_id="sb_QK", trigger="manual", max_items=None),
+            sessions_factory,
+            StubLocks(acquired=False),
+            reconciler,
+            CALLER,
+        )
+
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.details["batch_id"] == "sb_QK"
+    assert reconciler.calls == []
+
+
+async def test_max_items_is_passed_down_when_supplied(sessions_factory) -> None:
     """The runbook uses a small bound to reconcile one problem batch without a full pass."""
     reconciler = StubReconciler()
 
@@ -332,6 +439,8 @@ async def test_get_run_reads_in_one_session(sessions_factory) -> None:
 
 
 async def test_backlog_passes_its_filters_through() -> None:
+    backlog = StubBacklog({"total_items": 4_113, "buckets": [], "stale_batches": 2})
+
     payload = await get_backlog(backlog, "USD", "sb_QK")
 
     assert payload["total_items"] == 4_113
@@ -353,6 +462,9 @@ async def test_the_backlog_route_touches_no_session() -> None:
 
     `BacklogService` owns its own read; giving the route a session as well would double
     the connection cost of the one screen people refresh most.
+    """
+    backlog = StubBacklog({"total_items": 12, "buckets": [], "stale_batches": 0})
+
     payload = await get_backlog(backlog, None, "sb_QK")
 
     assert payload["total_items"] == 12

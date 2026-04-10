@@ -62,3 +62,14 @@ class RetryScheduler:
     ) -> None:
         self._sessions = sessions
         self._items = items
+        self._poster = poster
+        self._publisher = publisher
+        self._clock = clock
+        self._flags = flags
+        # Arrived with PAY-2043. It is why the hotfix could not be "one file, one
+        # function": this constructor changed, and app/container.py changed with it.
+        self._locks = locks
+        self._settings = settings
+
+    async def retry_item(
+        self, item_id: str, *, requested_by: str | None = None
