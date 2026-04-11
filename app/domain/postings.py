@@ -71,6 +71,70 @@ class PostingLine:
         return self.amount_minor if self.direction == "debit" else -self.amount_minor
 
 
+class PostingRule(abc.ABC):
+    """Builds the legs of one ledger transaction.
+
+    Subclasses declare the ``purpose`` they post under and implement :meth:`build`.
+    There is deliberately no branching outside ``build`` — a rule that inspects the
+    session, the clock or a feature flag is not a rule, it is a service.
+    """
+
+    purpose: ClassVar[LedgerPurpose]
+
+    @abc.abstractmethod
+    def build(self, ctx: PostingContext) -> list[PostingLine]:
+        """Return the balanced legs for this posting."""
+
+    def validate(self, lines: list[PostingLine]) -> None:
+        """Enforce invariants 1, 2 and 4 of `domain-model.md` §7.
+
+        1. ``sum(debits) == sum(credits)`` — else :class:`UnbalancedTransactionError`.
+        2. at least two entries — else :class:`UnbalancedTransactionError`.
+        4. every ``amount_minor > 0`` — else :class:`NegativeAmountError`.
+
+        Currency (3) and livemode (5) are checked by ``LedgerPoster.post``, which is the
+        only thing that knows the transaction header the lines will hang off.
+        """
+        if len(lines) < 2:
+            raise UnbalancedTransactionError(
+                "a transaction needs at least two entries",
+                details={"purpose": self.purpose, "line_count": len(lines)},
+            )
+        for index, line in enumerate(lines):
+            if line.amount_minor <= 0:
+                raise NegativeAmountError(
+                    "entry amounts must be strictly positive; direction carries the sign",
+                    details={
+                        "purpose": self.purpose,
+                        "sequence": index,
+                        "amount_minor": line.amount_minor,
+                        "account_type": line.account_type,
+                    },
+                )
+        delta = sum(line.signed_minor() for line in lines)
+        if delta != 0:
+            raise UnbalancedTransactionError(
+                "debits do not equal credits",
+                details={
+                    "purpose": self.purpose,
+                    "debit_minus_credit_minor": delta,
+                    "line_count": len(lines),
+                },
+            )
+
+    def _built(self, ctx: PostingContext, lines: list[PostingLine]) -> list[PostingLine]:
+        """Drop zero-amount legs, then validate. Every concrete ends with this call.
+
+        Zero legs are normal: a merchant with ``reserve_bps == 0`` has no reserve leg and
+        a fee-free line has no expense leg. Emitting them would violate invariant 4.
+        """
+        kept = [line for line in lines if line.amount_minor != 0]
+        self.validate(kept)
+        if ctx.currency and not ctx.currency.strip():
+            raise ValidationError("posting context has no currency", details={})
+        return kept
+
+
 def debit(account_type: AccountType, amount_minor: int) -> PostingLine:
     """Shorthand used by every rule body."""
     return PostingLine(account_type=account_type, direction="debit", amount_minor=amount_minor)
@@ -137,3 +201,31 @@ POSTING_RULE_BY_LINE_TYPE: Final[dict[str, PostingRule]] = {
     "reserve_release": POSTING_RULE_BY_PURPOSE["reserve_release"],
 }
 
+__all__ = [
+    "POSTING_RULE_BY_LINE_TYPE",
+    "POSTING_RULE_BY_PURPOSE",
+    "AdjustmentLinePostingRule",
+    "AdjustmentPostingRule",
+    "AuthPostingRule",
+    "AuthReleasePostingRule",
+    "CapturePostingRule",
+    "ChargebackPostingRule",
+    "ChargebackReversalPostingRule",
+    "DisputePostingRule",
+    "FeePostingRule",
+    "PayoutPostingRule",
+    "PayoutReversalPostingRule",
+    "PostingContext",
+    "PostingLine",
+    "PostingRule",
+    "RefundPostingRule",
+    "ReserveHoldPostingRule",
+    "ReserveReleasePostingRule",
+    "ReversalPostingRule",
+    "SchemeFeePostingRule",
+    "SettlementFundingPostingRule",
+    "SettlementPostingRule",
+    "SettlementRefundPostingRule",
+    "credit",
+    "debit",
+]
