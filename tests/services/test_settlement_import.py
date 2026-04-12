@@ -192,6 +192,10 @@ async def test_import_file_closes_the_batch(sessions_factory) -> None:
 
     An import that forgets this step leaves the items sitting there forever, and the only
     symptom is a merchant asking why they have not been paid.
+    """
+    processor = StubProcessor()
+    service, settlements, _ = _importer(sessions_factory, processor)
+
     batch = await service.import_file("worldflow", PROCESSING_DATE)
 
     assert settlements.closed == [batch.id]
@@ -199,6 +203,10 @@ async def test_import_file_closes_the_batch(sessions_factory) -> None:
 
 
 async def test_import_file_is_a_no_op_for_a_file_already_imported(sessions_factory) -> None:
+    """Worldflow reposts on its own timeouts, roughly weekly."""
+    processor = StubProcessor()
+    service, settlements, _ = _importer(sessions_factory, processor)
+
     first = await service.import_file("worldflow", PROCESSING_DATE)
     second = await service.import_file("worldflow", PROCESSING_DATE)
 
