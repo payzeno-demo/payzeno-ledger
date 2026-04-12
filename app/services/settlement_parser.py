@@ -111,7 +111,54 @@ class WorldflowCsvParser(SettlementFileParser):
                     interchange_minor=_int(row.get("interchange_minor")),
                     scheme_fee_minor=_int(row.get("scheme_fee_minor")),
                     net_minor=_int(row.get("net_minor")),
+                    currency=currency,
+                )
+            )
+
+        logger.info("settlement_file_parsed", acquirer=self.acquirer, lines=len(lines))
+        return lines
+
+
+class LegacyFixedWidthParser(SettlementFileParser):
+    """Nordpay's fixed-width format.
+
+    Field offsets come straight out of the 2019 spec PDF. Amounts arrive as decimal
+    strings with an implied two decimal places for every currency Nordpay supports,
+    which is not true in general — hence the trip through ``to_minor`` rather than a
+    naive multiply by 100.
+
+    Record layout::
+
+        0-19   acquirer reference        (left-justified, space padded)
+        20-39  network reference
+        40-41  line type code
+        42-53  gross amount              (signed, decimal string)
+        54-65  fee amount
+        66-77  interchange amount
+        78-89  scheme fee amount
+        90-101 net amount
+        102-104 currency
+    """
+
+    acquirer = "nordpay"
+
+    RECORD_LENGTH: ClassVar[int] = 105
+
+    def parse(self, raw: bytes) -> list[ParsedSettlementLine]:
+        text = raw.decode("latin-1")
+        lines: list[ParsedSettlementLine] = []
+
+        for row_number, record in enumerate(text.splitlines(), start=1):
+            if not record.strip():
+                continue
+            if record.startswith(("HDR", "TRL")):
+                # Header and trailer carry counts and a checksum we verify elsewhere.
+                continue
+            if len(record) < self.RECORD_LENGTH:
+                raise ValidationError(
+                    "fixed-width settlement record is short",
                     acquirer=self.acquirer,
+                    row=row_number,
                     length=len(record),
                     expected=self.RECORD_LENGTH,
                 )
