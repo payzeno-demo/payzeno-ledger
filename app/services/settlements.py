@@ -209,6 +209,40 @@ class SettlementService:
             batch_id = batch.id
 
         async with self._sessions.begin() as session:
+            batch = await self._settlements.close_batch(session, batch_id)
+
+        metrics.increment("SettlementFileImported", acquirer=acquirer)
+        logger.info(
+            "settlement_file_imported",
             batch_id=batch_id,
             acquirer=acquirer,
+            item_count=len(parsed),
+        )
+        return batch
+
+    def _build_items(
+        self, batch: SettlementBatch, parsed: list[ParsedSettlementLine]
+    ) -> list[ReconciliationItem]:
+        now = self._clock.now()
+        return [
+            ReconciliationItem(
+                id=new_id("ri"),
+                batch_id=batch.id,
+                charge_id=None,
+                merchant_id=None,
+                line_type=line.line_type,
+                gross_minor=line.gross_minor,
+                fee_minor=line.fee_minor,
+                interchange_minor=line.interchange_minor,
+                scheme_fee_minor=line.scheme_fee_minor,
+                net_minor=line.net_minor,
+                currency=line.currency,
+                livemode=batch.livemode,
+                acquirer_reference=line.acquirer_reference,
+                network_reference=line.network_reference,
+                status="pending",
+                match_method="unmatched",
+                next_attempt_at=now,
+            )
+            for line in parsed
         ]
