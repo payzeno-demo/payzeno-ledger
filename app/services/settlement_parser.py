@@ -166,12 +166,14 @@ class LegacyFixedWidthParser(SettlementFileParser):
             currency = record[102:105].strip().upper() or "EUR"
             lines.append(
                 ParsedSettlementLine(
+                    acquirer_reference=record[0:20].strip(),
                     line_type=self._line_type(record[40:42]),
                     gross_minor=to_minor(record[42:54].strip(), currency),
                     fee_minor=to_minor(record[54:66].strip() or "0", currency),
                     interchange_minor=to_minor(record[66:78].strip() or "0", currency),
                     scheme_fee_minor=to_minor(record[78:90].strip() or "0", currency),
                     net_minor=to_minor(record[90:102].strip(), currency),
+                    currency=currency,
                 )
             )
 

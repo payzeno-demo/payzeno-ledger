@@ -87,6 +87,7 @@ class PayzenoLedgerError(Exception):
         self.details: dict[str, Any] = details
         super().__init__(self.message)
 
+    code: ClassVar[str] = "validation_failed"
     http_status: ClassVar[int] = 422
 
 
@@ -98,6 +99,7 @@ class NotFoundError(PayzenoLedgerError):
     legible error, but there is also no reason to leak which merchants exist.
     """
 
+    code: ClassVar[str] = "not_found"
     http_status: ClassVar[int] = 404
 
 
@@ -204,6 +206,22 @@ class IdempotencyConflictError(PayzenoLedgerError):
     """
 
     code: ClassVar[str] = "duplicate_settlement"
+    http_status: ClassVar[int] = 409
+
+
+class DuplicateSettlementError(IdempotencyConflictError):
+    """The same settlement was posted twice.
+
+    Carries ``existing_transaction_id`` so the 409 body tells the caller which row won —
+    ``api-surface.md`` §10.2. Since PR #172 the money path asks
+    ``LedgerPoster.post(..., on_conflict='return_existing')`` instead of raising, so this
+    is now reached only by ``POST /internal/v1/transactions`` and by the ops CLI.
+    """
+
+
+class SettlementError(PayzenoLedgerError):
+    """Base for everything the settlement/reconciliation path can refuse."""
+
     http_status: ClassVar[int] = 422
 
 
