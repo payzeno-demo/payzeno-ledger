@@ -67,6 +67,11 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         reserved_delta: int = 0,
         disputed_delta: int = 0,
         last_transaction_id: str | None = None,
+        computed_at: dt.datetime | None = None,
+    ) -> None:
+        """Apply one posting's signed deltas to the cached balance.
+
+        ``INSERT ... ON CONFLICT (merchant_id, currency, livemode) DO UPDATE SET
         available_minor = merchant_balance_cache.available_minor + EXCLUDED...`` — the
         arithmetic happens **in the database**, not in Python.
 
@@ -123,6 +128,14 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         session: AsyncSession,
         *,
         limit: int = 500,
+        older_than: dt.datetime | None = None,
+    ) -> list[MerchantBalanceCache]:
+        """Cached balances least recently recomputed, oldest first.
+
+        The audit job walks these and recomputes each from ``ledger_entry``. Ordered by
+        ``computed_at`` under ``ix_merchant_balance_cache_computed`` so a nightly run with
+        a budget of 500 rows eventually covers every merchant rather than re-checking the
+        same alphabetical prefix forever.
         """
         stmt = (
             select(MerchantBalanceCache)

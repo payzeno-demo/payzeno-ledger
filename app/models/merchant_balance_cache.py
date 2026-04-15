@@ -37,8 +37,27 @@ class MerchantBalanceCache(Base):
 
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, primary_key=True)
+    livemode: Mapped[bool] = mapped_column(primary_key=True)
+
+    #: Credits from FUNDED batches minus debits minus in-flight payouts. What a payout may
+    #: be drawn against.
+    available_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+    #: Captured but not yet funded — the acquirer still owes us.
+    pending_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     #: Rolling reserve withheld. Released by ReserveReleaseJob, never accumulated forever.
     reserved_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    #: Moved into chargeback_liability by the `dispute` posting. NOT subtracted again by
+    #: PayoutCalculator — that would deduct the same dispute twice.
+    disputed_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    #: The shortfall when refunds and chargebacks drive merchant_payable into a debit
+    #: balance. Surfaced as Balance.negative_balance_minor so the console can show it, and
+    #: escalated by NegativeBalanceJob.
+    negative_balance_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+
     last_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
