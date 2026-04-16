@@ -122,6 +122,15 @@ class BalanceService:
             raise ValidationError(
                 f"unsupported interval {interval!r}",
                 interval=interval,
+                supported=sorted(INTERVALS),
+            )
+        if to <= from_:
+            raise ValidationError("`to` must be after `from`", from_=from_.isoformat())
+
+        bucket_count = int((to - from_) / width) + 1
+        if bucket_count > MAX_BUCKETS:
+            raise ValidationError(
+                "requested range produces too many buckets",
                 buckets=bucket_count,
                 max_buckets=MAX_BUCKETS,
                 interval=interval,
