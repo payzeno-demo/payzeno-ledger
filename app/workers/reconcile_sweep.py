@@ -60,3 +60,9 @@ class ReconciliationSweepJob(PeriodicJob):
                     batch_id,
                     trigger="scheduled",
                     max_items=self._settings.reconcile_max_items_per_run,
+                )
+            except PayzenoLedgerError as exc:
+                # One bad batch does not stop the sweep. It will be picked up again in
+                # fifteen minutes, and the failure is already on the run row.
+                logger.error(
+                    "sweep_batch_failed",

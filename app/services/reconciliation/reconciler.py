@@ -212,3 +212,14 @@ class ReconciliationService:
                     {
                         "batch_id": batch_id,
                         "run_id": run.id,
+                        "items_failed": stats.failed,
+                        "items_orphaned": stats.orphaned,
+                        "error_summary": run.error_summary or "reconciliation failed",
+                        "failed_at": self._clock.now().isoformat(),
+                    },
+                    merchant_id=None,
+                    correlation_id=run.id,
+                    session=session,
+                    livemode=batch.livemode,
+                )
+                return
