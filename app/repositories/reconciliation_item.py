@@ -236,3 +236,15 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
 
         None of these ever auto-settle. ``needs_review`` in particular is what the
         heuristic amount-window match produces — a hint, not an answer.
+        """
+        stmt = (
+            select(ReconciliationItem)
+            .where(
+                ReconciliationItem.status.in_(
+                    ("needs_review", "variance_exceeded", "orphaned")
+                )
+            )
+            .order_by(ReconciliationItem.created_at)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
