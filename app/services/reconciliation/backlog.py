@@ -61,6 +61,7 @@ class BacklogService:
                 batch_id=batch_id,
             )
 
+            items=total_items,
         return set(running)
 
 
