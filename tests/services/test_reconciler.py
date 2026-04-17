@@ -73,6 +73,7 @@ class Settings:
 
 def build(sessions_factory, batches, items, runs, poster, *, locks=None):
     publisher = CollectingPublisher()
+    lock_manager = locks or RecordingLocks()
     service = ReconciliationService(
         sessions=sessions_factory,
         locks=lock_manager,
@@ -254,6 +255,9 @@ async def test_an_empty_batch_still_produces_a_finished_run(
     sessions_factory, batches, items, runs
 ) -> None:
     batches.seed(make_batch(batch_id="sb_empty", status="closed"))
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch("sb_empty")
 
     assert run.items_total == 0
