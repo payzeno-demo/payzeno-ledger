@@ -131,6 +131,23 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         Returns ``None`` rather than raising: ``_claim_item`` treats a missing item as
         "not claimable" and returns ``None`` to its caller, which the route maps onto
         ``409 settlement_locked``. Raising here would turn a lost race into a 500.
+        """
+        stmt = select(ReconciliationItem.batch_id).where(ReconciliationItem.id == item_id)
+        return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def mark_settled(
+        self,
+        session: AsyncSession,
+        item_id: str,
+        *,
+        transaction_id: str,
+        at: dt.datetime,
+    ) -> ReconciliationItem:
+        """Stamp an item as settled and record the transaction that settled it.
+
+        ``settled_transaction_id`` is invariant (4) of `data-model.md` §6 — every settled
+        item points at a transaction that exists — and it is what let the incident's
+        cleanup query find the 1,847 items that pointed at a *second* transaction.
         error_code: str | None = None,
         at: dt.datetime | None = None,
     ) -> ReconciliationItem:
@@ -178,6 +195,19 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
             func.coalesce(func.sum(ReconciliationItem.fee_minor), 0),
             func.coalesce(func.sum(ReconciliationItem.net_minor), 0),
         ).where(ReconciliationItem.batch_id == batch_id)
+        row = (await session.execute(stmt)).one()
+        return BatchTotals(
+            item_count=int(row[0]),
+            gross_minor=int(row[1]),
+            fee_minor=int(row[2]),
+            net_minor=int(row[3]),
+        )
+
+    async def aggregate_backlog(
+        self,
+        session: AsyncSession,
+        *,
+        statuses: frozenset[str],
         currency: str | None = None,
         """
         stmt = (
