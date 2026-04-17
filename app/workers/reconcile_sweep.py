@@ -66,3 +66,9 @@ class ReconciliationSweepJob(PeriodicJob):
                 # fifteen minutes, and the failure is already on the run row.
                 logger.error(
                     "sweep_batch_failed",
+                    batch_id=batch_id,
+                    code=exc.code,
+                )
+                continue
+            processed += run.items_settled
+

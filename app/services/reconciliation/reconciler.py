@@ -223,3 +223,14 @@ class ReconciliationService:
                     livemode=batch.livemode,
                 )
                 return
+
+            chunks = _chunk(stats.settled_charge_ids, COMPLETION_CHUNK_SIZE)
+            for index, chunk in enumerate(chunks):
+                await self._publisher.publish(
+                    "settlement.completed",
+                    {
+                        "batch_id": batch_id,
+                        "run_id": run.id,
+                        "acquirer": batch.acquirer,
+                        "currency": batch.currency,
+                        "processing_date": batch.processing_date.isoformat(),
