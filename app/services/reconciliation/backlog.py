@@ -62,6 +62,7 @@ class BacklogService:
             )
 
             items=total_items,
+            running = await self._runs.list_running_batch_ids(session, batch_ids)
         return set(running)
 
 
