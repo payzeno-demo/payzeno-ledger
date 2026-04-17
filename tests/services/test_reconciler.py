@@ -68,7 +68,12 @@ class ScriptedPoster(SettlementPoster):
 
 class Settings:
     reconcile_max_items_per_run = 500
+    reconcile_sweep_wall_budget_seconds = 30
+
+
+def build(sessions_factory, batches, items, runs, poster, *, locks=None):
     publisher = CollectingPublisher()
+    lock_manager = locks or RecordingLocks()
     service = ReconciliationService(
         sessions=sessions_factory,
         locks=lock_manager,
@@ -171,6 +176,20 @@ async def test_sweep_skips_settled_items(sessions_factory, batches, items, runs)
 
     run = await service.reconcile_batch(batch_of_three)
 
+    assert run.items_settled == 2
+    assert run.items_failed == 1
+    assert run.status == "failed"
+    assert items.rows["ri_sweep_1"].status == "retryable"
+    assert items.rows["ri_sweep_1"].last_error_code == "rate_limited"
+    # the other two still went through — one bad line does not abandon a batch
+    assert items.rows["ri_sweep_2"].status == "settled"
+
+
+async def test_a_terminal_failure_marks_the_item_failed(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    run = await service.reconcile_batch(batch_of_three)
+
     assert items.rows["ri_sweep_0"].status == "failed"
     assert items.rows["ri_sweep_0"].last_error_code == "orphaned_item"
     assert run.items_failed == 1
@@ -236,6 +255,9 @@ async def test_an_empty_batch_still_produces_a_finished_run(
     sessions_factory, batches, items, runs
 ) -> None:
     batches.seed(make_batch(batch_id="sb_empty", status="closed"))
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch("sb_empty")
 
     assert run.items_total == 0

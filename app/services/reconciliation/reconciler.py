@@ -201,3 +201,36 @@ class ReconciliationService:
         ``COMPLETION_CHUNK_SIZE`` and every chunk carries ``chunk_index`` /
         ``chunk_count``; the API side only marks a batch complete when it has seen all
         of them.
+        """
+        batch_id = run.batch_id
+        async with self._sessions.begin() as session:
+            batch = await self._batches.get_or_raise(session, batch_id)
+
+            if stats.failed and stats.settled == 0:
+                await self._publisher.publish(
+                    "settlement.reconciliation_failed",
+                    {
+                        "batch_id": batch_id,
+                        "run_id": run.id,
+                        "items_failed": stats.failed,
+                        "items_orphaned": stats.orphaned,
+                        "error_summary": run.error_summary or "reconciliation failed",
+                        "failed_at": self._clock.now().isoformat(),
+                    },
+                    merchant_id=None,
+                    correlation_id=run.id,
+                    session=session,
+                    livemode=batch.livemode,
+                )
+                return
+
+            chunks = _chunk(stats.settled_charge_ids, COMPLETION_CHUNK_SIZE)
+            for index, chunk in enumerate(chunks):
+                await self._publisher.publish(
+                    "settlement.completed",
+                    {
+                        "batch_id": batch_id,
+                        "run_id": run.id,
+                        "acquirer": batch.acquirer,
+                        "currency": batch.currency,
+                        "processing_date": batch.processing_date.isoformat(),
