@@ -98,6 +98,7 @@ def apportion_fee(gross: Money, components: Sequence[FeeComponent]) -> FeeBreakd
         exact_total += exact
         parts[component.name] = int(exact.quantize(_ONE, rounding=ROUND_HALF_UP))
 
+    total_minor = int(exact_total.quantize(_ONE, rounding=ROUND_HALF_UP))
     remainder = total_minor - sum(parts.values())
 
     sink = MARKUP_COMPONENT if MARKUP_COMPONENT in parts else names[-1]
@@ -140,3 +141,45 @@ def legacy_blended_fee(gross: Money) -> Money:
     Reproducing that truncation is the entire reason this is not a one-liner.
     """
     rate = Decimal(_LEGACY_BLENDED_BPS) / Decimal(BPS_DENOMINATOR)
+    raw = Decimal(gross.amount_minor) * rate
+    minor = int(truncated.quantize(_ONE, rounding=ROUND_HALF_UP)) + _LEGACY_BLENDED_FIXED_MINOR
+    return Money(amount_minor=min(minor, gross.amount_minor), currency=gross.currency)
+
+
+def blended_or_legacy(gross: Money, *, bps: int, fixed_minor: int, legacy: bool) -> Money:
+    """Route a blended merchant to the modern or the legacy calculation.
+
+    ``legacy`` is true only for merchants whose billing profile still carries a
+    ``deprecated_at``-less ``fee_schedule`` row in payzeno-billing-legacy. There were
+    nine of them at the last count and nobody has scheduled the cutover.
+    """
+    if legacy:
+        return legacy_blended_fee(gross)
+    return compute_platform_fee(gross, bps, fixed_minor)
+
+
+def interchange_plus_components(
+    *, markup_bps: int, markup_fixed_minor: int, interchange_minor: int, scheme_fee_minor: int
+) -> list[FeeComponent]:
+    """Build the component list :func:`apportion_fee` expects for an IC++ merchant.
+
+    Interchange and scheme fees arrive as absolute amounts off the acquirer file, so they
+    are expressed as zero-rate components with a fixed part.
+    """
+    return [
+        FeeComponent(name="interchange", bps=0, fixed_minor=interchange_minor),
+        FeeComponent(name="scheme_fee", bps=0, fixed_minor=scheme_fee_minor),
+        FeeComponent(name=MARKUP_COMPONENT, bps=markup_bps, fixed_minor=markup_fixed_minor),
+    ]
+
+
+def net_of_fee(gross: Money, fee: Money) -> Money:
+    """What the merchant is owed after a fee. Never negative."""
+    if gross.currency != fee.currency:
+        raise ValidationError(
+            "fee currency differs from gross",
+            details={"gross": gross.currency, "fee": fee.currency},
+        )
+    if fee.amount_minor > gross.amount_minor:
+        return zero(gross.currency)
+    return Money(amount_minor=gross.amount_minor - fee.amount_minor, currency=gross.currency)

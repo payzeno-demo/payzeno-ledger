@@ -59,14 +59,25 @@ async def handle_payment_authorized(
         network_transaction_id=data.get("network_transaction_id"),
         capture_method=data["capture_method"],
         capture_at_settlement=bool(data["capture_at_settlement"]),
+        reserve_bps=int(data.get("reserve_bps", 0)),
         platform_fee_fixed_minor=int(data.get("platform_fee_fixed_minor", 0)),
         livemode=livemode,
         authorized_at=_parse(data["authorized_at"]),
         updated_at=clock.now(),
         source_event_id=event_id,
+        idempotency_key=ledger_key("auth", data["merchant_id"], data["charge_id"]),
+        merchant_id=data["merchant_id"],
         currency=data["currency"],
         reference_type="charge",
+        reference_id=data["charge_id"],
         lines=lines,
+        created_by="system",
+        request_fingerprint=event_id,
+        on_conflict="return_existing",
+    )
+    logger.info(
+        "payment_authorized_projected",
+        charge_id=data["charge_id"],
         merchant_id=data["merchant_id"],
         capture_at_settlement=projection.capture_at_settlement,
     )
@@ -114,9 +125,12 @@ async def handle_payment_captured(
         idempotency_key=ledger_key("capture", data["merchant_id"], data["charge_id"]),
         purpose="capture",
         merchant_id=data["merchant_id"],
+        livemode=livemode,
         reference_type="charge",
+        reference_id=data["charge_id"],
         lines=lines,
         created_by="system",
+        request_fingerprint=event_id,
         on_conflict="return_existing",
     )
 
@@ -152,6 +166,8 @@ async def handle_payment_canceled(
     )
     await ledger.post(
         session,
+        purpose="auth_release",
+        livemode=livemode,
         reference_type="charge",
         reference_id=charge_id,
         lines=lines,
@@ -202,9 +218,12 @@ async def handle_refund_created(
         session,
         idempotency_key=ledger_key("refund", data["merchant_id"], data["refund_id"]),
         purpose="refund",
+        merchant_id=data["merchant_id"],
         currency=data["currency"],
+        livemode=livemode,
         reference_type="refund",
         reference_id=data["refund_id"],
+        lines=lines,
         on_conflict="return_existing",
     )
 
@@ -248,16 +267,22 @@ async def handle_dispute_opened(
     )
     await ledger.post(
         session,
+        idempotency_key=key,
         purpose="dispute",
         merchant_id=data["merchant_id"],
+        currency=data["currency"],
+        livemode=livemode,
         reference_type="dispute",
+        reference_id=data["dispute_id"],
         dispute_id=data["dispute_id"],
         merchant_id=data["merchant_id"],
         idempotency_key=ledger_key("disputewon", payload["merchant_id"], payload["dispute_id"]),
         merchant_id=payload["merchant_id"],
         currency=payload["currency"],
         livemode=livemode,
+        reference_id=payload["dispute_id"],
         lines=lines,
+        created_by="system",
         on_conflict="return_existing",
     )
 
