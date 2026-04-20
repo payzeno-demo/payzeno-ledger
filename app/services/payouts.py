@@ -195,8 +195,21 @@ class PayoutService:
         if bank_account_id:
             bank = await self._banks.get_or_raise(session, str(bank_account_id))
         else:
+            bank = await self._banks.get_default(
+                session, merchant_id=merchant_id, currency=currency, livemode=True
+            )
+
+        initiator = self._initiators.get(method)
+        if initiator is None:
+            raise ValidationError(f"unsupported payout method {method!r}", method=method)
+
+        available_on = self._calendar.next_business_day(
+            cutoff.date(), currency, method
+        )
+        payout = Payout(
             id=new_id("po"),
             merchant_id=merchant_id,
+            bank_account_id=bank.bank_account_id,
             amount_minor=requested,
             status="scheduled",
             statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
@@ -207,6 +220,7 @@ class PayoutService:
         posted = await self._ledger.post(
             session,
             idempotency_key=ledger_key("payout", merchant_id, payout.id),
+            merchant_id=merchant_id,
             currency=currency,
             reference_id=payout.id,
             created_by="system",
@@ -279,6 +293,29 @@ class PayoutService:
             "payout_failed",
             payout_id=payout_id,
             failure_code=failure_code,
+            reversal_transaction_id=reversal,
+        )
+        return payout
+
+    async def _mark_returned(
+        self,
+        session: AsyncSession,
+        payout: Payout,
+        *,
+        failure_code: str,
+        failure_message: str,
+    ) -> Payout:
+        """An ACH/SEPA return: the money left, the receiving bank sent it back.
+
+        The reversal is identical to the failure path — the merchant's payable balance
+        has to come back either way — but the return can arrive five business days after
+        `paid`, against a balance that has since funded another payout. That is why the
+        reversal is posted here and not left to the next sweep.
+        """
+        reversal = await self._reverse_payout_posting(session, payout, reason=failure_code)
+        returned = await self._payouts.mark_returned(
+            session,
+            payout.id,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
             session=session,
@@ -288,11 +325,22 @@ class PayoutService:
             "payout_returned",
             payout_id=returned.id,
             failure_code=failure_code,
+            idempotency_key=ledger_key("payoutrev", payout.merchant_id, payout.id),
             purpose="payout_reversal",
             merchant_id=payout.merchant_id,
             currency=payout.currency,
             livemode=payout.livemode,
             reference_type="payout",
+            lines=[
+                PostingLine(
+                    account_type="cash", direction="debit", amount_minor=payout.amount_minor
+                ),
+                PostingLine(
+                    account_type="merchant_payable",
+                    direction="credit",
+                    amount_minor=payout.amount_minor,
+                ),
+            ],
             created_by="system",
             request_fingerprint=ledger_key("payoutrevfp", payout.id, reason),
         )
