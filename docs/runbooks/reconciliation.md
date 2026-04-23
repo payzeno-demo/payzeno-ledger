@@ -27,3 +27,40 @@ safe; it was not always (see `docs/postmortems/2041-duplicate-settlement.md`).
 | `ReconciliationRunStuck` | run in `running` > 30m | "Who holds the lock", below. |
 | `LedgerBalanceCacheDrift` | `merchant_balance_cache` vs `ledger_entry` | This alarm is about the **cache**, not the ledger. It is the alarm that paged the wrong person on PAY-2041 night. Confirm with the trial balance before you touch the cache. |
 
+## The duplicate query
+
+The one that found 1,847 rows at 01:38.
+
+```sql
+SELECT idempotency_key,
+       count(*)                       AS rows,
+       min(posted_at)                 AS first_posted,
+       max(posted_at)                 AS last_posted,
+       array_agg(id ORDER BY posted_at) AS transaction_ids
+FROM   ledger_transaction
+WHERE  purpose = 'settle'
+  AND  posted_at > now() - interval '24 hours'
+GROUP  BY idempotency_key
+HAVING count(*) > 1
+ORDER  BY count(*) DESC;
+```
+
+Since migration `0020` this cannot return rows —
+`uq_ledger_transaction_idempotency_key` is unique. If it does, stop and page. Do **not**
+`DELETE`: `ledger_entry` is append-only and enforced by trigger. The correction path is
+`SELECT reverse_duplicate_transactions('<idempotency_key>')`, which quarantines into
+`settlement_duplicate_audit` and posts a compensating `reversal`. It reverses the row with
+the later `posted_at`, which is the one `reconciliation_item.settled_transaction_id` does
+not reference.
+
+And check for cardholder impact separately — the ledger row is the cheap half:
+
+```sql
+SELECT c.charge_id, c.merchant_id, count(*) AS captures
+FROM   capture_attempt a
+JOIN   settlement_charge c ON c.charge_id = a.charge_id
+WHERE  a.created_at > now() - interval '24 hours'
+GROUP  BY 1, 2
+HAVING count(*) > 1;
+```
+
