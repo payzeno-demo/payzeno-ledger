@@ -169,6 +169,18 @@ async def test_sweep_skips_settled_items(sessions_factory, batches, items, runs)
     just not a concurrency test, and it was read as one for three months.
     """
     batches.seed(make_batch(batch_id="sb_skip", status="closed"))
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
+    await service._process_item(sessions_factory.session, already.id)
+
+    assert poster.calls == []
+    assert already.settled_transaction_id is None
+
+
+async def test_a_retryable_failure_marks_the_item_and_keeps_going(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     poster = ScriptedPoster(
         fail_with={"ri_sweep_1": RetryableSettlementError(item_id="ri_sweep_1", code="rate_limited")}
     )
@@ -188,6 +200,9 @@ async def test_sweep_skips_settled_items(sessions_factory, batches, items, runs)
 async def test_a_terminal_failure_marks_the_item_failed(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
+    poster = ScriptedPoster(fail_with={"ri_sweep_0": OrphanedItemError(item_id="ri_sweep_0")})
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch(batch_of_three)
 
     assert items.rows["ri_sweep_0"].status == "failed"
@@ -198,6 +213,14 @@ async def test_a_terminal_failure_marks_the_item_failed(
 async def test_mark_retryable_uses_its_own_session(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
+    # Same reasoning as RetryScheduler: the per-item transaction has rolled back, so the
+    # status has to be written by a transaction that has not.
+    poster = ScriptedPoster(
+        fail_with={
+            "ri_sweep_0": RetryableSettlementError(item_id="ri_sweep_0", code="temporary_failure")
+        }
+    )
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
     before = sessions_factory.begin_count
 
     await service.reconcile_batch(batch_of_three)
@@ -219,6 +242,9 @@ async def test_max_items_bounds_the_pass(sessions_factory, batches, items, runs)
                 next_attempt_at=NOW,
             )
         )
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch("sb_big", max_items=5)
 
     assert run.items_total == 5
@@ -239,6 +265,17 @@ async def test_run_counters_are_locals_not_orm_mutations(
 
 
 async def test_publishes_settlement_completed_on_success(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    poster = ScriptedPoster()
+    service, publisher, _ = build(sessions_factory, batches, items, runs, poster)
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert publisher.event_types() == ["settlement.completed"]
+
+
+async def test_publishes_reconciliation_failed_when_items_failed(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
     poster = ScriptedPoster(

@@ -64,3 +64,4 @@ class ReconcilePassStats:
     fee_total_minor: int = 0
     net_total_minor: int = 0
 
+    @property
