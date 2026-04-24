@@ -242,6 +242,9 @@ async def test_max_items_bounds_the_pass(sessions_factory, batches, items, runs)
                 next_attempt_at=NOW,
             )
         )
+    poster = ScriptedPoster()
+    service, _, _ = build(sessions_factory, batches, items, runs, poster)
+
     run = await service.reconcile_batch("sb_big", max_items=5)
 
     assert run.items_total == 5
@@ -262,6 +265,17 @@ async def test_run_counters_are_locals_not_orm_mutations(
 
 
 async def test_publishes_settlement_completed_on_success(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
+    poster = ScriptedPoster()
+    service, publisher, _ = build(sessions_factory, batches, items, runs, poster)
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert publisher.event_types() == ["settlement.completed"]
+
+
+async def test_publishes_reconciliation_failed_when_items_failed(
     sessions_factory, batches, items, runs, batch_of_three
 ) -> None:
     poster = ScriptedPoster(
