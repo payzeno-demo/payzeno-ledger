@@ -140,6 +140,7 @@ async def test_created_projects_the_merchant() -> None:
     await handle_merchant_created(
         object(),
         _created_payload(),
+        merchants=merchants,
         resolver=BootstrappingResolver(),
         clock=FrozenClock(NOW),
         livemode=True,
@@ -160,6 +161,9 @@ async def test_created_bootstraps_the_account_set() -> None:
         object(),
         _created_payload(),
         merchants=UpsertingMerchants(),
+        clock=FrozenClock(NOW),
+        event_id="evt_c1",
+        occurred_at=NOW,
         livemode=True,
     )
 
@@ -201,6 +205,7 @@ async def test_updated_is_the_only_way_capture_at_settlement_becomes_true() -> N
         resolver=BootstrappingResolver(),
         clock=FrozenClock(NOW),
         event_id="evt_c1",
+        occurred_at=EARLIER,
         livemode=True,
     )
 
@@ -228,6 +233,8 @@ async def test_updated_preserves_the_immutable_fields_from_the_existing_row() ->
         object(),
         _created_payload(country="GB", default_currency="GBP"),
         merchants=merchants,
+        resolver=BootstrappingResolver(),
+        event_id="evt_c1",
         occurred_at=EARLIER,
         livemode=True,
     )
@@ -276,11 +283,25 @@ async def test_status_change_applies_to_the_projection() -> None:
     await handle_merchant_created(
         object(),
         _created_payload(),
+        resolver=BootstrappingResolver(),
         event_id="evt_c1",
         occurred_at=EARLIER,
         merchants=merchants,
         clock=FrozenClock(NOW),
         event_id="evt_s1",
+        occurred_at=NOW,
+    )
+
+    assert merchants.rows["mer_c1"].status == "restricted"
+    assert merchants.status_updates == [("mer_c1", "restricted")]
+
+
+async def test_a_status_change_for_an_unknown_merchant_is_a_no_op() -> None:
+    merchants = UpsertingMerchants()
+
+    await handle_merchant_status_changed(
+        object(),
+        {"merchant_id": "mer_ghost", "status": "suspended"},
         merchants=merchants,
         event_id="evt_s2",
         occurred_at=NOW,
@@ -322,9 +343,47 @@ async def test_a_verified_account_is_projected_as_verified() -> None:
         clock=FrozenClock(NOW),
         event_id="evt_b1",
         occurred_at=NOW,
+        livemode=True,
+    )
+
+    assert banks.rows["ba_1"].status == "verified"
+
+
+async def test_the_ledger_stores_a_token_and_a_last_four_and_nothing_else() -> None:
+    """arc PCI. The ledger has never held a full account number or a PAN.
+
+    Reviewers push back on this in every PR that touches a projection, and they are
+    right to; the compliance doc names this table.
+    """
+    banks = UpsertingBanks()
+
+    await handle_bank_account_verified(
+        object(),
+        _bank_payload(),
         banks=banks,
         event_id="evt_b1",
         occurred_at=NOW,
+        livemode=True,
+    )
+
+    row = banks.rows["ba_1"]
+    assert row.account_number_token == "tok_bank_1"
+    assert row.routing_last_four == "0021"
+    assert not hasattr(row, "account_number")
+
+
+async def test_a_new_default_clears_the_previous_one() -> None:
+    """`pix_bank_account_projection_default` is unique per merchant/currency.
+
+    Without the clear, the second verified default violates it and the event fails
+    forever on redelivery.
+    """
+    banks = UpsertingBanks()
+
+    await handle_bank_account_verified(
+        object(),
+        _bank_payload(bank_account_id="ba_2"),
+        banks=banks,
         clock=FrozenClock(NOW),
         event_id="evt_b2",
         occurred_at=NOW,
@@ -341,6 +400,7 @@ async def test_a_non_default_account_does_not_clear_anything() -> None:
     await handle_bank_account_verified(
         object(),
         _bank_payload(bank_account_id="ba_3", is_default=False),
+        banks=banks,
         clock=FrozenClock(NOW),
         occurred_at=NOW,
         livemode=True,
