@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     #: three sessions in one pass and `RetryDrainJob` takes a fourth, so the floor is
     #: 3 x (concurrent sweeps) + drains. Production is 20 across four tasks.
     database_pool_size: int = 20
+    database_pool_max_overflow: int = 10
     # -- internal auth -------------------------------------------------------------
     #: Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's
     #: PAYZENO_INTERNAL_SECRET. All three must match or nothing talks to us.
@@ -61,6 +62,8 @@ class Settings(BaseSettings):
     #: resolves the real endpoint.
     aws_endpoint_url: str | None = None
 
+    # -- acquirers -----------------------------------------------------------------
+    worldflow_base_url: str = "http://payzeno-acquirer-sandbox:9100"
     #: BREAKER_WINDOW is a request COUNT, not a duration.
     worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
@@ -102,6 +105,7 @@ class Settings(BaseSettings):
 
     @field_validator("log_level", mode="before")
     @classmethod
+    @field_validator("aws_endpoint_url", "otel_exporter_otlp_endpoint", mode="before")
     @classmethod
     def _blank_is_none(cls, value: object) -> object:
         """An empty string in the environment means "unset", not "endpoint ''".

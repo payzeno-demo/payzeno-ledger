@@ -73,3 +73,14 @@ class RetryScheduler:
 
     async def retry_item(
         self, item_id: str, *, requested_by: str | None = None
+    ) -> ReconciliationItem | None:
+        """Attempt one item. Returns ``None`` when the item was not claimable.
+
+        A ``None`` is not an error. The route maps it onto ``409 settlement_locked`` and
+        the console treats that as "already settling", refetches, and shows no toast.
+        """
+        try:
+            async with self._sessions.begin() as session:
+                item = await self._claim_item(session, item_id)
+                if item is None:
+                    return None

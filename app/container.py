@@ -193,6 +193,7 @@ class Container:
             balances=repos.balance_cache,
             entries=repos.entries,
             accounts=repos.accounts,
+            transactions=repos.transactions,
             merchants=repos.merchants,
             ledger=self.ledger_poster,
             processor=self.processor,
@@ -210,7 +211,9 @@ class Container:
         self.manual_match = ManualMatch(repos.charges)
 
         self.settlement_service = SettlementService(
+            batches=repos.batches,
             items=repos.items,
+            publisher=self.publisher,
             clock=self.clock,
         )
         self.settlement_import_service = SettlementImportService(
@@ -302,6 +305,7 @@ class Container:
         self.audit_service = LedgerAuditService(
             sessions=self.sessions,
             entries=repos.entries,
+            transactions=repos.transactions,
             balances=repos.balance_cache,
             clock=self.clock,
         )
@@ -336,6 +340,9 @@ class Container:
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
+            importer=self.settlement_import_service, clock=self.clock, settings=settings
+        )
+        self.batch_close_job = BatchCloseJob(
             sessions=self.sessions,
             batches=repos.batches,
             clock=self.clock,
@@ -345,6 +352,9 @@ class Container:
             funding=self.funding_service, settings=settings
         )
         self.deferred_capture_job = DeferredCaptureJob(
+            captures=self.capture_service, settings=settings
+        )
+        self.payout_scheduler_job = PayoutSchedulerJob(
             sessions=self.sessions,
             clock=self.clock,
             settings=settings,
