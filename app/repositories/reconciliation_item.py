@@ -111,6 +111,8 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         session: AsyncSession,
         *,
         limit: int,
+        """
+        cutoff = now or dt.datetime.now(dt.UTC)
         stmt = (
             select(ReconciliationItem.id)
             .where(ReconciliationItem.status.in_(("pending", "retryable")))
