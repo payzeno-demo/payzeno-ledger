@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     #: over an hour and starved the drain completely.
     reconcile_sweep_wall_budget_seconds: int = 30
     reconcile_max_items_per_run: int = 500
+    #: The live ceiling `RetryScheduler` reads. `constants.MAX_ATTEMPTS` is only the
+    #: default value baked into the module — it is not the read path, and collapsing the
+    #: two would make this env var dead and the knob unturnable at 01:44.
+    reconcile_max_attempts: int = 5
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
@@ -118,6 +122,7 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @property
     @property
     def alembic_database_url(self) -> str:
         """The same DSN with the sync driver, for Alembic.
