@@ -30,6 +30,13 @@ from prometheus_client import CollectorRegistry, Counter, Histogram
 
 __all__ = ["BUSINESS_REGISTRY", "Metrics", "metrics"]
 
+#: A registry of its own so a test can assert on business metrics without the HTTP
+#: middleware's series, and so ``/metrics`` can expose both from one scrape.
+BUSINESS_REGISTRY: Final[CollectorRegistry] = CollectorRegistry()
+
+_NAME_RE: Final[re.Pattern[str]] = re.compile(r"(?<!^)(?=[A-Z])")
+
+
 def _prometheus_name(metric: str) -> str:
     """``SettlementItemPosted`` -> ``payzeno_ledger_settlement_item_posted``.
 
@@ -37,6 +44,67 @@ def _prometheus_name(metric: str) -> str:
     a translation table that drifts.
     """
     return "payzeno_ledger_" + _NAME_RE.sub("_", metric).lower()
+
+
+class Metrics:
+    """Lazily-registered counters and histograms, keyed by name and label set.
+
+    Prometheus client objects must be created once per (name, labelnames) pair, and this
+    service emits from services, workers, consumers and middleware — none of which knows
+    at import time which labels a given call site will pass. So they are built on first
+    use and cached. The alternative, declaring every metric up front, was tried: it lasted
+    until the third person added a counter and forgot the declaration.
+    """
+
+    def __init__(self, registry: CollectorRegistry | None = None) -> None:
+        self._registry = registry if registry is not None else BUSINESS_REGISTRY
+        self._counters: dict[tuple[str, tuple[str, ...]], Counter] = {}
+        self._histograms: dict[tuple[str, tuple[str, ...]], Histogram] = {}
+
+    def increment(self, metric: str, /, **labels: Any) -> None:
+        """Add one to ``metric``.
+
+        Label values are stringified rather than validated: a caller that passes an int
+        status code should not have to remember to format it, and a caller that passes an
+        id will show up in the cardinality dashboard, which is where it gets caught.
+        """
+        names = tuple(sorted(labels))
+        counter = self._counters.get((metric, names))
+        if counter is None:
+            counter = Counter(
+                _prometheus_name(metric),
+                f"payzeno-ledger business metric {metric}",
+                labelnames=names,
+                registry=self._registry,
+            )
+            self._counters[(metric, names)] = counter
+        if names:
+            counter.labels(*(str(labels[name]) for name in names)).inc()
+        else:
+            counter.inc()
+
+    def observe(self, metric: str, value: float, /, **labels: Any) -> None:
+        """Record one sample of ``metric``.
+
+        Used for job durations and per-pass counts — ``RetryDrainSettled``,
+        ``OutboxBacklog``, ``JobDurationMs``. A pass that settles zero items still
+        observes zero; the absence of a sample and a sample of zero mean very different
+        things at 02:00 and only one of them is "the drain is running".
+        """
+        names = tuple(sorted(labels))
+        histogram = self._histograms.get((metric, names))
+        if histogram is None:
+            histogram = Histogram(
+                _prometheus_name(metric),
+                f"payzeno-ledger business observation {metric}",
+                labelnames=names,
+                registry=self._registry,
+            )
+            self._histograms[(metric, names)] = histogram
+        if names:
+            histogram.labels(*(str(labels[name]) for name in names)).observe(value)
+        else:
+            histogram.observe(value)
 
 
 #: The process-wide emitter. Imported as ``from app.metrics import metrics`` by twenty-five
