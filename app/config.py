@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     sns_ledger_topic_arn: str = (
         "arn:aws:sns:eu-west-1:000000000000:payzeno-ledger-events"
     )
+    sqs_payments_queue_url: str = ""
     sqs_merchants_queue_url: str = ""
     aws_region: str = "eu-west-1"
     #: Local only — localstack. Must be unset in staging and production so boto3
@@ -91,6 +92,9 @@ class Settings(BaseSettings):
     ledger_audit_enabled: bool = True
     settlement_import_enabled: bool = True
     funding_match_tolerance_bps: int = 5
+
+    #: arc PCI. Non-removable: compliance signed off on the assumption it is always on.
+    flag_redact_pan_in_logs: bool = True
 
     # -- observability -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
