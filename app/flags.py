@@ -85,3 +85,9 @@ class EnvFeatureFlags(FeatureFlags):
         """True when ``flag`` was explicitly set to a truthy value."""
         return bool(self._values.get(flag, False))
 
+    def set(self, flag: str, value: bool) -> None:
+        """Flip a flag in place. Used by the ops CLI's ``--flag name=on`` argument."""
+        self._values[flag] = value
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging affordance only
+        return f"StaticFeatureFlags({self._values!r})"
