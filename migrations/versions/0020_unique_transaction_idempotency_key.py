@@ -25,6 +25,10 @@ from alembic import op
 
 revision = "0020"
 down_revision = "0019"
+branch_labels = None
+depends_on = None
+
+
 def upgrade() -> None:
     op.add_column(
         "ledger_transaction",
@@ -81,3 +85,14 @@ def upgrade() -> None:
     )
 
 
+def downgrade() -> None:
+    # Reversible in shape only. The reversals stay posted; ledger_entry is append-only and
+    # un-reversing a duplicate settlement is not a thing a downgrade gets to do.
+    op.drop_index("uq_ledger_transaction_idempotency_key", table_name="ledger_transaction")
+    op.create_index(
+        "ix_ledger_transaction_idempotency_key",
+        "ledger_transaction",
+        ["idempotency_key"],
+        unique=False,
+    )
+    op.drop_column("ledger_transaction", "request_fingerprint")
