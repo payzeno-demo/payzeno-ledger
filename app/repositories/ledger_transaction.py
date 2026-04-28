@@ -183,3 +183,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
             .where(LedgerTransaction.reference_type == reference_type)
             .where(LedgerTransaction.reference_id == reference_id)
             .order_by(LedgerTransaction.posted_at.desc())
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_for_merchant(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        purpose: str | None = None,
+        limit: int = 100,
+    ) -> list[LedgerTransaction]:

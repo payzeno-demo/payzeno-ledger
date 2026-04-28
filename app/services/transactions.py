@@ -137,6 +137,10 @@ class LedgerPoster:
             reference_id=reference_id,
             created_by=created_by,
             livemode=livemode,
+            request_fingerprint=request_fingerprint,
+        )
+
+        if not claim.created:
             # Somebody else owns the key. Nothing has been written by us and — critically
             # for the caller — no entries and no external call have happened.
             existing = await self._transactions.get_or_raise(session, claim.transaction_id)
@@ -164,8 +168,43 @@ class LedgerPoster:
 
         logger.info(
             "ledger_transaction_posted",
+            transaction_id=transaction.id,
             purpose=purpose,
             merchant_id=merchant_id,
+            entry_count=len(entries),
+        )
+        return PostResult(transaction=transaction, created=True)
+
+    async def _publish_posted(
+        self,
+        session: AsyncSession,
+        transaction: LedgerTransaction,
+        entries: list[LedgerEntry],
+    ) -> None:
+        """Stage ``ledger.transaction_posted`` in the posting transaction.
+
+        Nobody subscribes to this one — it is the ops/analytics firehose feed and the
+        postmortem timeline, and it is deliberately unconsumed. It goes through the
+        outbox anyway: a rolled-back posting that had emitted an audit event would be
+        worse than no audit event at all.
+        """
+        await self._publisher.publish(
+            "ledger.transaction_posted",
+            {
+                "transaction_id": transaction.id,
+                "idempotency_key": transaction.idempotency_key,
+                "purpose": transaction.purpose,
+                "merchant_id": transaction.merchant_id,
+                "currency": transaction.currency,
+                "reference_type": transaction.reference_type,
+                "reference_id": transaction.reference_id,
+                "created_by": transaction.created_by,
+                "entry_count": len(entries),
+                "amount_minor": sum(
+                    entry.amount_minor for entry in entries if entry.direction == "debit"
+                ),
+                "posted_at": transaction.posted_at.isoformat(),
+            },
             merchant_id=transaction.merchant_id,
             correlation_id=transaction.id,
             livemode=transaction.livemode,
@@ -207,10 +246,62 @@ class LedgerPoster:
             lines=flipped,
             created_by=created_by,
             transaction_id=result.transaction.id,
+            reverses=original.id,
+            account = await self._resolver.get_or_create(
+                session,
+                merchant_id=None if _is_platform_account(line.account_type) else merchant_id,
+                type_=line.account_type,
+                currency=currency,
+                livemode=livemode,
+            )
+            if account.status in ("frozen", "closed"):
+                raise AccountFrozenError(
+                    f"account {account.id} is {account.status}",
+                    account_id=account.id,
+                    merchant_id=merchant_id,
+                    account_type=line.account_type,
+                )
+            entries.append(
+                LedgerEntry(
+                    id=new_id("le"),
+                    transaction_id=transaction.id,
+                    account_id=account.id,
+                    account_type=line.account_type,
+                    direction=line.direction,
+                    amount_minor=line.amount_minor,
+                    currency=currency,
+                    livemode=livemode,
+                    sequence=sequence,
+                )
+            )
+        return entries
+
+    async def _apply_balance_delta(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str | None,
+        currency: str,
+        livemode: bool,
+        entries: list[LedgerEntry],
+        transaction_id: str,
+    ) -> None:
+        if merchant_id is None:
+            return
+        available = _signed_total(entries, AVAILABLE_ACCOUNT_TYPES)
+        pending = _signed_total(entries, PENDING_ACCOUNT_TYPES)
+        reserved = _signed_total(entries, RESERVED_ACCOUNT_TYPES)
+        disputed = _signed_total(entries, DISPUTED_ACCOUNT_TYPES)
+        if not any((available, pending, reserved, disputed)):
+            return
+        await self._balances.apply_delta(
+            session,
             currency=currency,
             available_delta=available,
+            pending_delta=pending,
             reserved_delta=reserved,
             disputed_delta=disputed,
+            last_transaction_id=transaction_id,
             computed_at=self._clock.now(),
         )
 
