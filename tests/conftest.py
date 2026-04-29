@@ -37,5 +37,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 #: seconds for every `pytest -m integration`.
 TEST_DATABASE_URL_ENV = "TEST_DATABASE_URL"
 
+#: Postgres 15, matching production. Not `:latest`: `pg_advisory_xact_lock` semantics and
+#: the `ON CONFLICT ... WHERE` planner behaviour under READ COMMITTED are the two things
+#: this suite actually depends on, and neither is something to discover has changed.
+POSTGRES_IMAGE = "postgres:15-alpine"
+
+
+@pytest.fixture(scope="session")
 @pytest.fixture(scope="session")
 @pytest.fixture
