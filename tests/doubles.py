@@ -46,6 +46,9 @@ class FrozenClock(Clock):
     def __init__(self, now: dt.datetime | None = None) -> None:
         self._now = now or FIXED_NOW
 
+    def now(self) -> dt.datetime:
+        return self._now
+
     def advance(self, seconds: float) -> dt.datetime:
         """Move forward. Returns the new instant so a test can assert against it.
 
@@ -99,6 +102,15 @@ class CollectingPublisher(EventPublisher):
         )
         return envelope_id
 
+    def event_types(self) -> list[str]:
+        """Every type published, **in order**.
+
+        Order matters in more than one assertion: ``settlement.item_settled`` before
+        ``settlement.duplicate_detected`` is the difference between "the first caller won
+        and the second found out" and "something published a duplicate for no reason".
+        """
+        return [event["type"] for event in self.published]
+
     def payload_for(self, event_type: str) -> dict[str, Any]:
         """The payload of the **last** event of this type.
 
@@ -111,6 +123,93 @@ class CollectingPublisher(EventPublisher):
         raise AssertionError(
             f"no {event_type!r} was published; got {self.event_types()}"
         )
+
+    def count(self, event_type: str) -> int:
+        """How many of this type went out. Two ``item_settled`` for one item is the bug."""
+        return sum(1 for event in self.published if event["type"] == event_type)
+
+
+class RecordingProcessorClient(ProcessorClient):
+    """A :class:`~app.ports.ProcessorClient` that records calls and can be made to fail.
+
+    ``call_order`` is the reason this exists rather than a bare mock. Several assertions
+    are about *sequence* — ``confirm_settlement`` runs unconditionally and first, and
+    ``capture_deferred`` runs only after the idempotency claim succeeded — and a mock that
+    records per-method call lists cannot express "before".
+
+    The integration suite subclasses the same idea with an ``asyncio.Barrier`` inside
+    ``capture_deferred`` so the two callers interleave deterministically. That barrier is
+    test-only scaffolding; this class is the plain version.
+    """
+
+    def __init__(
+        self,
+        *,
+        confirm_raises: Exception | None = None,
+        capture_raises: Exception | None = None,
+        capture_state: str = "captured",
+        settlement_file: bytes = b"",
+    ) -> None:
+        self.confirm_calls: list[dict[str, Any]] = []
+        self.capture_calls: list[dict[str, Any]] = []
+        self.status_calls: list[dict[str, Any]] = []
+        self.fetches: list[tuple[str, dt.date]] = []
+        self.call_order: list[str] = []
+        self._confirm_raises = confirm_raises
+        self._capture_raises = capture_raises
+        self._capture_state = capture_state
+        self._settlement_file = settlement_file
+
+    async def confirm_settlement(
+        self, acquirer: str, acquirer_reference: str, batch_id: str
+    ) -> None:
+        self.call_order.append("confirm_settlement")
+        self.confirm_calls.append(
+            {
+                "acquirer": acquirer,
+                "acquirer_reference": acquirer_reference,
+                "batch_id": batch_id,
+            }
+        )
+        if self._confirm_raises is not None:
+            raise self._confirm_raises
+
+    async def capture_deferred(
+        self,
+        charge_id: str,
+        amount_minor: int,
+        currency: str,
+        reference: str,
+        *,
+        idempotency_key: str,
+    ) -> CaptureResponse:
+        self.call_order.append("capture_deferred")
+        self.capture_calls.append(
+            {
+                "charge_id": charge_id,
+                "amount_minor": amount_minor,
+                "currency": currency,
+                "reference": reference,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self._capture_raises is not None:
+            raise self._capture_raises
+        return CaptureResponse(
+            captured=True, reference=idempotency_key, captured_at=FIXED_NOW
+        )
+
+    async def get_capture_status(self, acquirer: str, idempotency_key: str) -> CaptureStatus:
+        self.call_order.append("get_capture_status")
+        self.status_calls.append(
+            {"acquirer": acquirer, "idempotency_key": idempotency_key}
+        )
+        captured = any(
+            call["idempotency_key"] == idempotency_key for call in self.capture_calls
+        )
+        if captured:
+            return CaptureStatus(state="captured", reference=idempotency_key)
+        return CaptureStatus(state=self._capture_state, reference=None)  # type: ignore[arg-type]
 
     async def fetch_settlement_file(self, acquirer: str, processing_date: dt.date) -> bytes:
         self.call_order.append("fetch_settlement_file")
