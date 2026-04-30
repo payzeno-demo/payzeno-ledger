@@ -58,6 +58,11 @@ class RecordingLocks(AdvisoryLockManager):
 class ScriptedPoster(SettlementPoster):
     """Settles everything, unless the item id appears in `fail_with`."""
 
+    def __init__(self, fail_with: dict[str, Exception] | None = None) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.fail_with = fail_with or {}
+        self._seq = 0
+
     async def post_settlement(self, session: Any, item: Any, *, caller: str) -> SettlementResult:
         self.calls.append((item.id, caller))
         if item.id in self.fail_with:
@@ -139,6 +144,19 @@ async def test_it_takes_no_row_locks_at_all(
     The sweep's item read is a plain SELECT. Against another sweep the batch lock is
     sufficient. Against a drain holding `FOR UPDATE SKIP LOCKED` on the same row it is
     nothing at all, because SKIP LOCKED only skips rows somebody else has LOCKED.
+    """
+    poster = ScriptedPoster()
+    service, _, locks = build(sessions_factory, batches, items, runs, poster)
+
+    await service.reconcile_batch(batch_of_three)
+
+    assert locks.item_locks == []
+    assert locks.row_locks == []
+
+
+async def test_it_passes_the_batch_pass_caller_tag(
+    sessions_factory, batches, items, runs, batch_of_three
+) -> None:
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 

@@ -55,6 +55,13 @@ class FakeLocks(AdvisoryLockManager):
     async def acquire_batch_lock(self, session: Any, batch_id: str) -> None:
         self.batch_locks.append(batch_id)
 
+    async def acquire_item_lock(self, session: Any, item_id: str) -> None:
+        self.item_locks.append(item_id)
+
+
+class StubPoster(SettlementPoster):
+    """`post_settlement` with the ledger write replaced by a counter."""
+
     def __init__(self, *, raises: Exception | None = None) -> None:
         self.calls: list[tuple[str, str]] = []
         self.raises = raises
@@ -150,6 +157,24 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
 
     await scheduler.retry_item(seeded_item.id)
     poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert await scheduler.retry_item(seeded_item.id) is None
+    assert seeded_item.status == "failed"
+    assert seeded_item.last_error_code == "retry_exhausted"
+    assert poster.calls == []
+
+
+async def test_max_attempts_comes_from_settings_not_the_module_constant(
+    sessions_factory, items, seeded_item
+) -> None:
+    """RECONCILE_MAX_ATTEMPTS -> Settings.reconcile_max_attempts is the read path.
+
+    `constants.MAX_ATTEMPTS` is only the default value baked into the module. Reading the
+    constant directly would make the env var dead and the knob unturnable at 01:44.
+    """
+
+    poster = StubPoster()
     scheduler = RetryScheduler(
         sessions=sessions_factory,
         items=items,
@@ -168,6 +193,9 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
 
 
 async def test_retry_exhausted_is_the_declared_error_type() -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
     settled = await scheduler.drain(limit=50)
 
     assert settled == 5
