@@ -44,5 +44,21 @@ POSTGRES_IMAGE = "postgres:15-alpine"
 
 
 @pytest.fixture(scope="session")
+def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
+    """One loop for the whole session, so the session-scoped engine can outlive a test.
+
+    pytest-asyncio's default is a loop per test, and an ``AsyncEngine`` created on a loop
+    that has since closed fails on its next checkout with a bare ``RuntimeError: Event
+    loop is closed`` that names nothing useful.
+    """
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="session")
 @pytest.fixture(scope="session")
 @pytest.fixture
+def anyio_backend() -> str:
+    """asyncio only. This service has no trio code path and never will."""
+    return "asyncio"
