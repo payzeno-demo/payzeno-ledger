@@ -6,6 +6,26 @@ requires-python = ">=3.12,<3.13"
 license = { text = "UNLICENSED" }
 authors = [{ name = "Core Payments", email = "core-payments@payzeno.com" }]
 
+dependencies = [
+  "payzeno-contracts==3.4.0",          # cross-repo contract package, pypi.payzeno.internal
+  "fastapi==0.111.0",
+  "uvicorn[standard]==0.30.0",
+  "sqlalchemy[asyncio]==2.0.30",
+  "asyncpg==0.29.0",
+  "alembic==1.13.1",
+  "pydantic==2.7.1",
+  "pydantic-settings==2.2.1",
+  "apscheduler==3.10.4",
+  "aioboto3==12.4.0",
+  "httpx==0.27.0",
+  "python-ulid==2.5.0",
+  "prometheus-client==0.20.0",
+  "structlog==24.1.0",
+  "opentelemetry-sdk==1.24.0",
+  "opentelemetry-instrumentation-fastapi==0.45b0",
+  "redis==5.0.4",
+]
+
 [project.optional-dependencies]
 dev = [
   "pytest==8.2.0",
@@ -21,6 +41,8 @@ dev = [
 # the operator CLI — app/ops/cli.py. The second SessionFactory consumer.
 payzeno-ledger-ops = "app.ops.cli:main"
 
+[build-system]
+requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -63,8 +85,10 @@ ignore = [
 "tests/**" = ["ARG001", "ARG002", "S105", "S106"]
 "app/ops/**" = ["T201"]                      # the CLI prints tables on purpose
 
+[tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"                 # ADR 0002 — the layering is only readable absolute
 
+[tool.ruff.lint.isort]
 known-first-party = ["app", "tests"]
 known-third-party = ["payzeno_contracts"]
 
@@ -101,8 +125,17 @@ markers = [
   "integration: needs the pg_engine fixture (real Postgres via testcontainers)",
   "slow: takes more than a second; excluded from the pre-commit run",
 ]
+filterwarnings = [
+  "error",
+  # SQLAlchemy 2.0 emits this from the asyncpg dialect on rollback of a closed conn
+  "ignore::DeprecationWarning:asyncpg.*",
+]
+
 [tool.coverage.run]
 source = ["app"]
+branch = true
+omit = ["app/ops/*", "app/main.py"]
+
 [tool.coverage.report]
 show_missing = true
 exclude_lines = [
