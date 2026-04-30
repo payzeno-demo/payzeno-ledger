@@ -57,7 +57,61 @@ def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 @pytest.fixture(scope="session")
+def postgres_dsn() -> Iterator[str]:
+    """A DSN for a live Postgres: an existing one, or a container we start.
+
+    Skips — rather than fails — when neither is available. ``pytest -m "not integration"``
+    is the gate every developer runs and it must not need Docker; ``pytest -m integration``
+    is the second CI job and there it does.
+    """
+    existing = os.environ.get(TEST_DATABASE_URL_ENV)
+    if existing:
+        yield existing
+        return
+
+    try:
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:  # pragma: no cover - dev extra not installed
+        pytest.skip("testcontainers is not installed and TEST_DATABASE_URL is unset")
+
+    try:
+        with PostgresContainer(POSTGRES_IMAGE) as container:
+            yield container.get_connection_url().replace(
+                "postgresql+psycopg2://", "postgresql+asyncpg://"
+            )
+    except Exception as exc:  # pragma: no cover - no docker on this machine
+        pytest.skip(f"cannot start {POSTGRES_IMAGE}: {exc}")
+
+
 @pytest.fixture(scope="session")
+async def pg_engine(postgres_dsn: str) -> AsyncIterator[AsyncEngine]:
+    """The engine the integration and repository layers share.
+
+    Note what is **not** set: ``isolation_level``. Every session runs at READ COMMITTED,
+    the same as production, and that is load-bearing rather than incidental. The PAY-2043
+    fix works because a retry blocked on the batch advisory lock re-evaluates ``WHERE
+    status IN RETRYABLE_STATUSES`` against data the sweep has since committed. Under
+    REPEATABLE READ the snapshot is taken at the transaction's first statement — which
+    after the fix is the advisory-lock ``SELECT`` — so the re-read would still see
+    ``retryable`` and post a duplicate. Pinning the isolation level here would make the
+    regression test pass against a fix that does not work.
+
+    ``pool_size`` is deliberately generous: ``reconcile_batch`` holds three sessions in one
+    pass and the concurrency test runs a sweep and a drain at once.
+    """
+    engine = create_async_engine(
+        postgres_dsn,
+        pool_size=10,
+        max_overflow=5,
+        pool_pre_ping=True,
+        echo=False,
+    )
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     """asyncio only. This service has no trio code path and never will."""
