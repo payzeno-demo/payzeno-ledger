@@ -21,6 +21,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 @pytest.fixture
+def repo() -> SettlementBatchRepository:
+    return SettlementBatchRepository()
+
+
 async def test_list_by_status_with_an_empty_tuple_returns_nothing(
     session, repo: SettlementBatchRepository
 ) -> None:
@@ -59,3 +63,16 @@ async def test_mark_status_transitions(session, repo: SettlementBatchRepository)
     assert reconciled.reconciled_at is not None
 
 
+async def test_list_unfunded_uses_the_partial_index_predicate(
+    session, repo: SettlementBatchRepository
+) -> None:
+    await repo.add(
+        session,
+        make_batch(batch_id="sb_rb_8", status="reconciled", processing_date=date(2026, 4, 15)),
+    )
+    await repo.add(session, make_batch(batch_id="sb_rb_9", status="open"))
+    await session.flush()
+
+    unfunded = await repo.list_unfunded(session)
+
+    assert [b.id for b in unfunded] == ["sb_rb_8"]
