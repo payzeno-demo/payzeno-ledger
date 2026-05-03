@@ -38,3 +38,17 @@ enum tuples from `payzeno_contracts.types`.
 
 Two consequences people trip over, both intentional:
 
+- `app/api/deps.py` needs `Container` for its type hints and `Container` is L8. It imports
+  it under `TYPE_CHECKING` only.
+- `app/domain/calendar.py` cannot import `app/models/reserve.py`, so
+  `BankingCalendar.from_rows` duck-types whatever it is handed. That is not laziness; it is
+  the layering rule with its consequence paid rather than avoided.
+
+## Consequences
+
+Good: any file in `app/domain/` can be read, tested and reasoned about with no database
+and no framework. CI enforces 100% coverage there because there is nothing to mock.
+
+Bad: `app/container.py` is enormous and it is hot — every new service and every new
+dependency touches it. That is the cost of having exactly one construction site, and it is
+a cost worth paying: see ADR 0011 and the postmortem for what the alternative bought us.
