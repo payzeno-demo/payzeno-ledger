@@ -78,3 +78,14 @@ This is **PAY-2057**, filed at 02:52 on the incident night and still open. Do no
 by making the retry lock blocking: 200 drain attempts parked on pooled connections
 exhausts `DATABASE_POOL_SIZE` and takes the HTTP surface down with it.
 
+## Levers, in order of preference
+
+1. `RETRY_DRAIN_ENABLED=false` — stops the drain on a task. Read per tick, so it takes
+   effect within 60s, no redeploy.
+2. `RECONCILE_MAX_ITEMS_PER_RUN` — shortens a sweep pass, so the batch lock is released
+   sooner.
+3. `RECONCILE_MAX_ATTEMPTS` — read off `Settings` at call time. Lowering it stops items
+   cycling; they land in `failed` and need a manual match.
+4. `RETRY_DRAIN_INTERVAL_SECONDS=0` — unschedules the job entirely. Needs a task restart,
+   because `register_jobs` reads the interval once. This is the heavy hammer used at 01:44
+   on PAY-2041 night, and it is why the same change also scaled the service to one task.
