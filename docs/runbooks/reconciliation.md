@@ -64,3 +64,17 @@ GROUP  BY 1, 2
 HAVING count(*) > 1;
 ```
 
+## Drain throughput is zero and the backlog is not moving
+
+Almost always the lock convoy, and it is expected behaviour, not a fault. While a sweep of
+batch `B` is running, every `_claim_item` in a drain pass requests the same batch key,
+fails non-blockingly, and returns `None`. Throughput for `B` is zero until the sweep
+finishes. The items are being settled — by the sweep.
+
+Confirm: `checked_out` on the pool climbing toward `pool_size` while a run is `running` for
+that batch. `GET /readyz` reports the pool gauges.
+
+This is **PAY-2057**, filed at 02:52 on the incident night and still open. Do not "fix" it
+by making the retry lock blocking: 200 drain attempts parked on pooled connections
+exhausts `DATABASE_POOL_SIZE` and takes the HTTP surface down with it.
+
