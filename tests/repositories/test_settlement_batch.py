@@ -25,6 +25,49 @@ def repo() -> SettlementBatchRepository:
     return SettlementBatchRepository()
 
 
+async def test_file_reference_is_unique_per_acquirer(
+    session, repo: SettlementBatchRepository
+) -> None:
+    """`uq_settlement_batch_file (acquirer, file_reference)`.
+
+    The import job is idempotent because of this index and not because of anything clever in
+    the service: re-running an import for the same acquirer file cannot open a second batch.
+    Two acquirers may legitimately use the same file name, hence the composite.
+    """
+    await repo.add(
+        session, make_batch(batch_id="sb_rb_2", acquirer="worldflow", file_reference="WF-20260415")
+    )
+    await session.flush()
+
+    await repo.add(
+        session, make_batch(batch_id="sb_rb_3", acquirer="nordpay", file_reference="WF-20260415")
+    )
+    await session.flush()  # different acquirer, fine
+
+    await repo.add(
+        session, make_batch(batch_id="sb_rb_4", acquirer="worldflow", file_reference="WF-20260415")
+    )
+    with pytest.raises(IntegrityError):
+        await session.flush()
+
+
+async def test_list_by_status_is_what_the_sweep_calls(
+    session, repo: SettlementBatchRepository
+) -> None:
+    await repo.add(session, make_batch(batch_id="sb_rb_open", status="open"))
+    await repo.add(session, make_batch(batch_id="sb_rb_closed", status="closed"))
+    await repo.add(session, make_batch(batch_id="sb_rb_partial", status="partially_reconciled"))
+    await repo.add(session, make_batch(batch_id="sb_rb_done", status="reconciled"))
+    await session.flush()
+
+    found = await repo.list_by_status(session, ("closed", "partially_reconciled"))
+    ids = {b.id for b in found}
+
+    assert ids == {"sb_rb_closed", "sb_rb_partial"}
+    assert "sb_rb_open" not in ids
+    assert "sb_rb_done" not in ids
+
+
 async def test_list_by_status_with_an_empty_tuple_returns_nothing(
     session, repo: SettlementBatchRepository
 ) -> None:

@@ -64,11 +64,17 @@ async def handle_merchant_created(
         merchant_id=data["merchant_id"],
         currency=data["default_currency"],
         merchant_id=data["merchant_id"],
+        default_currency=data["default_currency"],
+        merchant_id=data["merchant_id"],
         risk_tier=data["risk_tier"],
         reserve_bps=int(data["reserve_bps"]),
+        pricing_model=data["pricing_model"],
         platform_fee_bps=int(data["platform_fee_bps"]),
         payout_delay_days=int(data["payout_delay_days"]),
+        settlement_tolerance_minor=int(data["settlement_tolerance_minor"]),
+        capture_at_settlement=bool(data["capture_at_settlement"]),
         payout_schedule=data["payout_schedule"],
+        source_event_id=event_id,
         source_occurred_at=occurred_at,
     )
     written = await merchants.upsert_if_newer(session, projection)
@@ -121,11 +127,14 @@ async def handle_bank_account_verified(
     """
     projection = BankAccountProjection(
         bank_account_id=payload["bank_account_id"],
+        merchant_id=payload["merchant_id"],
         currency=payload["currency"],
         country=payload["country"],
+        account_number_token=payload["account_number_token"],
         routing_last_four=payload.get("routing_last_four"),
         iban_last_four=payload.get("iban_last_four"),
         bic=payload.get("bic"),
+        source_event_id=event_id,
         source_occurred_at=occurred_at,
     )
     written = await banks.upsert_if_newer(session, projection)
@@ -146,6 +155,19 @@ async def handle_bank_account_verified(
     logger.info(
         "bank_account_projected",
         bank_account_id=projection.bank_account_id,
+        is_default=projection.is_default,
+    )
+
+
+def _projection_from(
+    data: dict[str, Any],
+    event_id: str,
+    occurred_at: datetime,
+    livemode: bool,
+    now: datetime,
+) -> MerchantProjection:
+    return MerchantProjection(
+        merchant_id=data["merchant_id"],
         default_currency=data["default_currency"],
         status=data["status"],
         risk_tier=data["risk_tier"],
