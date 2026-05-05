@@ -36,3 +36,9 @@ logger = get_logger(__name__)
 
 class RetryDrainJob(PeriodicJob):
     """Drain the retryable reconciliation backlog, oldest ``next_attempt_at`` first."""
+
+    name: ClassVar[str] = "retry_drain"
+
+    def __init__(self, scheduler: RetryScheduler, settings: Settings) -> None:
+        self._scheduler = scheduler
+        self._settings = settings

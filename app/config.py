@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_api_key: str = "sandbox_np_0000000000000000"
     nordpay_acquirer_account: str = "payzeno-uk-1"
+    nordpay_breaker_threshold_pct: int = 50
     nordpay_breaker_window: int = 100
     #: Wall-clock budget for one sweep pass, added by PR #171. The guard transaction is
     #: committed and reopened at this cadence so the batch advisory lock is never held
@@ -100,6 +101,11 @@ class Settings(BaseSettings):
     settlement_import_enabled: bool = True
     funding_match_tolerance_bps: int = 5
 
+    # -- feature flags (read through app/flags.py::EnvFeatureFlags, never directly) --
+    #: Gates the CloudWatch custom metric only. The `settlement.duplicate_detected`
+    #: event is published unconditionally — a flag in front of the publish would
+    #: silently disable the alarm the whole of PAY-2055 exists to produce.
+    flag_duplicate_settlement_alarm: bool = True
     #: arc PCI. Non-removable: compliance signed off on the assumption it is always on.
     flag_redact_pan_in_logs: bool = True
 

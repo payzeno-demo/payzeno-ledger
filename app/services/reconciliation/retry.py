@@ -84,3 +84,13 @@ class RetryScheduler:
                 item = await self._claim_item(session, item_id)
                 if item is None:
                     return None
+                if item.attempt_count >= self._settings.reconcile_max_attempts:
+                    raise RetryExhaustedError(
+                        f"item {item_id} exhausted {item.attempt_count} attempts",
+                        item_id=item_id,
+                        attempt_count=item.attempt_count,
+                    )
+
+                item.attempt_count += 1
+                item.last_attempt_at = self._clock.now()
+                item.status = "settling"

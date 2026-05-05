@@ -68,6 +68,22 @@ class StubPoster(SettlementPoster):
         self._seq = 0
         self.settled_by_key: dict[str, str] = {}
 
+    async def post_settlement(self, session: Any, item: Any, *, caller: str) -> SettlementResult:
+        self.calls.append((item.id, caller))
+        if self.raises is not None:
+            raise self.raises
+
+        key = f"settle:{item.batch_id}:{item.id}"
+        if key in self.settled_by_key:
+            return SettlementResult(transaction_id=self.settled_by_key[key], created=False)
+
+        self._seq += 1
+        transaction_id = f"txn_{self._seq:04d}"
+        self.settled_by_key[key] = transaction_id
+        return SettlementResult(transaction_id=transaction_id, created=True)
+
+
+class Settings:
     reconcile_retry_backoff_base_seconds = 30
     retry_drain_batch_size = 50
 
@@ -79,7 +95,17 @@ def build(
     *,
     locks: FakeLocks | None = None,
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
+    publisher = CollectingPublisher()
     lock_manager = locks or FakeLocks()
+    """
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
+
+    assert await scheduler._claim_item(sessions_factory.session, seeded_item.id) is None
+    assert poster.calls == []
+
+
+async def test_claim_item_returns_none_for_an_unknown_item(sessions_factory, items) -> None:
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
@@ -125,6 +151,7 @@ async def test_retry_is_idempotent(sessions_factory, items, seeded_item) -> None
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
+    first = await scheduler.retry_item(seeded_item.id)
     second = await scheduler.retry_item(seeded_item.id)
 
     assert first is not None
@@ -146,6 +173,27 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
     never mark anything retryable and would spin on the same item forever.
     before = sessions_factory.begin_count
 
+    result = await scheduler.retry_item(seeded_item.id)
+
+    assert result is None
+    assert seeded_item.status == "retryable"
+    assert seeded_item.attempt_count == 1
+    assert seeded_item.last_error_code == "processor_unavailable"
+    assert seeded_item.next_attempt_at > NOW
+    # a second `begin()` after the business one — the out-of-band transaction
+    assert sessions_factory.begin_count >= before + 2
+
+
+async def test_retryable_error_code_reaches_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster(raises=RetryableSettlementError(item_id="ri_svc", code="rate_limited"))
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    await scheduler.retry_item(seeded_item.id)
+
+    assert seeded_item.last_error_code == "rate_limited"
+
+
+async def test_backoff_grows_with_attempt_count(sessions_factory, items, seeded_item) -> None:
     poster = StubPoster(
         raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
     )
