@@ -68,6 +68,22 @@ class StubPoster(SettlementPoster):
         self._seq = 0
         self.settled_by_key: dict[str, str] = {}
 
+    async def post_settlement(self, session: Any, item: Any, *, caller: str) -> SettlementResult:
+        self.calls.append((item.id, caller))
+        if self.raises is not None:
+            raise self.raises
+
+        key = f"settle:{item.batch_id}:{item.id}"
+        if key in self.settled_by_key:
+            return SettlementResult(transaction_id=self.settled_by_key[key], created=False)
+
+        self._seq += 1
+        transaction_id = f"txn_{self._seq:04d}"
+        self.settled_by_key[key] = transaction_id
+        return SettlementResult(transaction_id=transaction_id, created=True)
+
+
+class Settings:
     reconcile_retry_backoff_base_seconds = 30
     retry_drain_batch_size = 50
 
@@ -79,6 +95,7 @@ def build(
     *,
     locks: FakeLocks | None = None,
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
+    publisher = CollectingPublisher()
     lock_manager = locks or FakeLocks()
     """
     poster = StubPoster()
@@ -168,6 +185,15 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
 
 
 async def test_retryable_error_code_reaches_the_item(sessions_factory, items, seeded_item) -> None:
+    poster = StubPoster(raises=RetryableSettlementError(item_id="ri_svc", code="rate_limited"))
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    await scheduler.retry_item(seeded_item.id)
+
+    assert seeded_item.last_error_code == "rate_limited"
+
+
+async def test_backoff_grows_with_attempt_count(sessions_factory, items, seeded_item) -> None:
     poster = StubPoster(
         raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
     )
