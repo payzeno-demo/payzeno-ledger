@@ -82,6 +82,31 @@ class EnvFeatureFlags(FeatureFlags):
         self._settings = settings
 
     def enabled(self, flag: str, *, merchant_id: str | None = None) -> bool:
+        """True when ``flag`` is on.
+
+        ``merchant_id`` is accepted and currently unused: none of the three live flags is
+        per-merchant. It stays in the signature because taking it out is a change at
+        every call site and putting it back is the same change again.
+        """
+        if flag not in FLAG_NAMES:
+            return False
+        return bool(getattr(self._settings, f"flag_{flag}", False))
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging affordance only
+        on = sorted(name for name in FLAG_NAMES if self.enabled(name))
+        return f"EnvFeatureFlags(on={on})"
+
+
+class StaticFeatureFlags(FeatureFlags):
+    """A fixed mapping. The second implementation, and it is wired in production.
+
+    ``app/ops/cli.py`` builds one so an operator command cannot accidentally pick up a
+    task's flag state, and every service-layer test constructs one directly. Unknown
+    flags are False, matching :class:`EnvFeatureFlags` — a test that passes ``{}`` gets
+    the same fail-closed behaviour production has.
+    """
+
+    def enabled(self, flag: str, *, merchant_id: str | None = None) -> bool:
         """True when ``flag`` was explicitly set to a truthy value."""
         return bool(self._values.get(flag, False))
 
