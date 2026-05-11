@@ -94,3 +94,14 @@ class RetryScheduler:
                 item.attempt_count += 1
                 item.last_attempt_at = self._clock.now()
                 item.status = "settling"
+
+                result = await self._poster.post_settlement(
+                    session, item, caller="retry_scheduler"
+                )
+
+                item.status = "settled"
+                item.settled_transaction_id = result.transaction_id
+                metrics.increment(
+                    "SettlementItemRetried",
+                    outcome="settled",
+                    requested_by=requested_by or "unknown",
