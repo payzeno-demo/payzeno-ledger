@@ -227,6 +227,7 @@ class Container:
 
         self.reconciliation_service = ReconciliationService(
             locks=self.locks,
+            items=repos.items,
             poster=self.settlement_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -240,6 +241,7 @@ class Container:
             items=repos.items,
             poster=self.settlement_poster,
             publisher=self.publisher,
+            clock=self.clock,
             flags=self.flags,
             settings=settings,
         )
@@ -273,8 +275,10 @@ class Container:
             ),
         }
         self.payout_service = PayoutService(
+            payouts=repos.payouts,
             calculator=self.payout_calculator,
             calendar=self.calendar,
+            ledger=self.ledger_poster,
             initiators=self.payout_initiators,
             publisher=self.publisher,
             flags=self.flags,
@@ -340,6 +344,9 @@ class Container:
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
+            scheduler=self.retry_scheduler, settings=settings
+        )
+        self.settlement_import_job = SettlementImportJob(
             importer=self.settlement_import_service, clock=self.clock, settings=settings
         )
         self.batch_close_job = BatchCloseJob(
@@ -369,6 +376,7 @@ class Container:
         self.outbox_drain_job = OutboxDrainJob(
             sessions=self.sessions,
             publisher=self.sns_publisher,
+            clock=self.clock,
             settings=settings,
         )
 
