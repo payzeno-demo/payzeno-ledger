@@ -65,7 +65,39 @@ async def handle_merchant_created(
         currency=data["default_currency"],
         merchant_id=data["merchant_id"],
         default_currency=data["default_currency"],
+        capture_at_settlement=projection.capture_at_settlement,
+    )
+
+
+async def handle_merchant_updated(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    merchants: MerchantProjectionRepository,
+    clock: Clock,
+    event_id: str,
+    occurred_at: datetime,
+    livemode: bool,
+) -> None:
+    """Full mutable field set, so the projection is a straight upsert rather than a diff.
+
+    This is the only mechanism by which ``merchant_projection.capture_at_settlement``
+    ever becomes true in the ledger.
+    """
+    data = _validated(MerchantUpdatedPayload, payload)
+    existing = await merchants.get(session, data["merchant_id"])
+    if existing is None:
+        logger.warning(
+            "merchant_updated_before_created",
+            merchant_id=data["merchant_id"],
+            source_event_id=event_id,
+        )
+        return
+
+    projection = MerchantProjection(
         merchant_id=data["merchant_id"],
+        default_currency=existing.default_currency,
+        status=data["status"],
         risk_tier=data["risk_tier"],
         reserve_bps=int(data["reserve_bps"]),
         pricing_model=data["pricing_model"],
@@ -74,6 +106,7 @@ async def handle_merchant_created(
         settlement_tolerance_minor=int(data["settlement_tolerance_minor"]),
         capture_at_settlement=bool(data["capture_at_settlement"]),
         payout_schedule=data["payout_schedule"],
+        updated_at=clock.now(),
         source_event_id=event_id,
         source_occurred_at=occurred_at,
     )
@@ -134,6 +167,8 @@ async def handle_bank_account_verified(
         routing_last_four=payload.get("routing_last_four"),
         iban_last_four=payload.get("iban_last_four"),
         bic=payload.get("bic"),
+        livemode=livemode,
+        updated_at=clock.now(),
         source_event_id=event_id,
         source_occurred_at=occurred_at,
     )
@@ -155,6 +190,7 @@ async def handle_bank_account_verified(
     logger.info(
         "bank_account_projected",
         bank_account_id=projection.bank_account_id,
+        merchant_id=projection.merchant_id,
         is_default=projection.is_default,
     )
 
@@ -171,9 +207,19 @@ def _projection_from(
         default_currency=data["default_currency"],
         status=data["status"],
         risk_tier=data["risk_tier"],
+        platform_fee_bps=int(data["platform_fee_bps"]),
+        platform_fee_fixed_minor=int(data["platform_fee_fixed_minor"]),
         payout_delay_days=int(data.get("payout_delay_days", 2)),
         settlement_tolerance_minor=int(data.get("settlement_tolerance_minor", 100)),
         capture_at_settlement=bool(data.get("capture_at_settlement", False)),
         payout_schedule=data["payout_schedule"],
         updated_at=now,
+        source_occurred_at=occurred_at,
+    )
+
+
+def _validated(model: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    validator = getattr(model, "model_validate", None)
+    if callable(validator):
+        return dict(validator(payload).model_dump())
     return payload

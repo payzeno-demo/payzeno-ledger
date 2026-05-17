@@ -36,6 +36,11 @@ def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
 
 
 def test_apportion_fee_puts_the_remainder_on_the_markup_not_on_rounding() -> None:
+    # Three components, a total that does not divide evenly. The odd minor unit belongs to
+    # the acquirer markup, because that is the only component whose value is derived rather
+    # than published. Sending it to `rounding_adjustment` makes the trial balance report a
+    # rounding artefact on every single settled charge.
+    gross = _usd(1_000)
     components = [
         FeeComponent(name="interchange", bps=100, fixed_minor=0),
         FeeComponent(name="scheme_fee", bps=100, fixed_minor=0),
@@ -51,6 +56,11 @@ def test_apportion_fee_puts_the_remainder_on_the_markup_not_on_rounding() -> Non
 
 
 def test_apportion_fee_with_a_single_component_returns_the_whole_fee() -> None:
+    breakdown = apportion_fee(_usd(10_000), [FeeComponent(name="blended", bps=290, fixed_minor=30)])
+    assert breakdown.components["blended"] == breakdown.total
+
+
+def test_apportion_fee_with_no_components_is_zero() -> None:
     breakdown = apportion_fee(_usd(10_000), [])
     assert breakdown.total.amount_minor == 0
     assert breakdown.components == {}
