@@ -97,6 +97,22 @@ def build(
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
     publisher = CollectingPublisher()
     lock_manager = locks or FakeLocks()
+    claimed = await scheduler._claim_item(sessions_factory.session, seeded_item.id)
+
+    assert claimed is not None
+    assert locks.batch_locks == [seeded_item.batch_id]
+    # Never the item lock. That one belongs to PayoutService, keyed on payout_id.
+    assert locks.item_locks == []
+
+
+async def test_claim_item_returns_none_when_a_sweep_holds_the_batch_lock(
+    sessions_factory, items, seeded_item
+) -> None:
+    """The fix, stated as behaviour.
+
+    A retry that loses the batch lock is a no-op, not a failure. The item stays retryable,
+    the sweep settles it, and the next drain's `WHERE status IN RETRYABLE_STATUSES` no
+    longer matches it.
     """
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
@@ -241,6 +257,38 @@ async def test_max_attempts_comes_from_settings_not_the_module_constant(
 
 
 async def test_retry_exhausted_is_the_declared_error_type() -> None:
+    # ProcessorUnavailableError is what the client raises; SettlementPoster translates it to
+    # RetryableSettlementError when the code is in RETRYABLE_ERROR_CODES. If an untranslated
+    # one leaks through, it is still a PayzenoLedgerError and the item fails rather than
+    # spinning — which is the safe direction.
+    poster = StubPoster(raises=ProcessorUnavailableError(code="processor_unavailable"))
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert await scheduler.retry_item(seeded_item.id) is None
+    assert seeded_item.status == "failed"
+
+
+# --------------------------------------------------------------------------------------
+# drain
+# --------------------------------------------------------------------------------------
+
+
+async def test_drain_processes_every_due_item(sessions_factory, items, batches) -> None:
+    from tests.factories import make_batch
+
+    batches.seed(make_batch(batch_id="sb_drain", status="closed"))
+    for n in range(5):
+        items.seed(
+            make_item(
+                item_id=f"ri_drain_{n}",
+                batch_id="sb_drain",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status="retryable",
+                next_attempt_at=NOW,
+            )
+        )
+
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 

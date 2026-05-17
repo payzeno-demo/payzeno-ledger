@@ -42,3 +42,10 @@ class RetryDrainJob(PeriodicJob):
     def __init__(self, scheduler: RetryScheduler, settings: Settings) -> None:
         self._scheduler = scheduler
         self._settings = settings
+
+    @property
+    def interval_seconds(self) -> int:
+        """``RETRY_DRAIN_INTERVAL_SECONDS``, 60.
+
+        Read on every registration rather than captured at import, so the interval can
+        be changed with a task restart instead of a redeploy. During PAY-2041 that
