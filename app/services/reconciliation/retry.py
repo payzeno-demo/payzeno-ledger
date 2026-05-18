@@ -105,3 +105,14 @@ class RetryScheduler:
                     "SettlementItemRetried",
                     outcome="settled",
                     requested_by=requested_by or "unknown",
+                )
+                return item
+
+        # Both branches run OUTSIDE the business session, in their own transaction,
+        # because the business transaction has already rolled back and everything
+        # written inside it is gone — including attempt_count. Mirrors
+        # ReconciliationService._mark_retryable.
+        except RetryableSettlementError as exc:
+            await self._mark_retryable(item_id, exc.code)
+            return None
+        except RetryExhaustedError:

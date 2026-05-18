@@ -49,3 +49,9 @@ class RetryDrainJob(PeriodicJob):
 
         Read on every registration rather than captured at import, so the interval can
         be changed with a task restart instead of a redeploy. During PAY-2041 that
+        distinction is what let the 01:44 mitigation happen at all: setting it to 0
+        stops the job being scheduled without touching a line of code.
+        """
+        return self._settings.retry_drain_interval_seconds
+
+    async def run_once(self) -> JobResult:
