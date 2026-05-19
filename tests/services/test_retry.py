@@ -125,6 +125,18 @@ async def test_claim_item_returns_none_for_an_unknown_item(sessions_factory, ite
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
+    assert await scheduler._claim_item(sessions_factory.session, "ri_ghost") is None
+
+
+async def test_claim_item_ignores_items_outside_retryable_statuses(
+    sessions_factory, items, batches
+) -> None:
+    from tests.factories import make_batch
+
+    batches.seed(make_batch(batch_id="sb_done", status="reconciled"))
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
     assert "settled" not in RETRYABLE_STATUSES
     assert await scheduler._claim_item(sessions_factory.session, settled.id) is None
 
@@ -220,6 +232,18 @@ async def test_backoff_grows_with_attempt_count(sessions_factory, items, seeded_
     seeded_item.status = "retryable"
 
     await scheduler.retry_item(seeded_item.id)
+    poster = StubPoster(raises=OrphanedItemError(item_id="ri_svc"))
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert await scheduler.retry_item(seeded_item.id) is None
+    assert seeded_item.status == "failed"
+    assert seeded_item.last_error_code == "orphaned_item"
+
+
+async def test_attempts_are_exhausted_at_the_configured_maximum(
+    sessions_factory, items, seeded_item
+) -> None:
+    seeded_item.attempt_count = Settings.reconcile_max_attempts
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
@@ -307,6 +331,37 @@ async def test_drain_respects_its_limit(sessions_factory, items, batches) -> Non
             make_item(
                 item_id=f"ri_lim_{n:02d}",
                 batch_id="sb_drain_limit",
+                charge_id="ch_default",
+                merchant_id="mer_default",
+                status="retryable",
+                next_attempt_at=NOW,
+            )
+        )
+
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert await scheduler.drain(limit=3) == 3
+
+
+async def test_drain_counts_only_the_items_it_actually_settled(
+    sessions_factory, items, batches
+) -> None:
+    """mregression's objection on PR #171, as a test.
+
+    During a sweep every claim in the pass fails to acquire the batch lock and returns None,
+    so drain throughput for that batch collapses to zero for as long as the sweep runs. That
+    is accepted — the sweep is settling the same items anyway — and PAY-2057 is the ticket
+    to stop discovering it lock by lock.
+    """
+    from tests.factories import make_batch
+
+    batches.seed(make_batch(batch_id="sb_swept", status="closed"))
+    for n in range(4):
+        items.seed(
+            make_item(
+                item_id=f"ri_swept_{n}",
+                batch_id="sb_swept",
                 charge_id="ch_default",
                 merchant_id="mer_default",
                 status="retryable",

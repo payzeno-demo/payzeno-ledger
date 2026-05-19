@@ -116,3 +116,13 @@ class RetryScheduler:
             await self._mark_retryable(item_id, exc.code)
             return None
         except RetryExhaustedError:
+            await self._mark_failed(item_id, "retry_exhausted")
+            return None
+        except PayzenoLedgerError as exc:
+            await self._mark_failed(item_id, exc.code)
+            return None
+
+    async def _mark_retryable(self, item_id: str, code: str) -> None:
+        async with self._sessions.begin() as session:
+            item = await self._items.get_or_raise(session, item_id)
+            item.attempt_count += 1
