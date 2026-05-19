@@ -155,6 +155,16 @@ async def start_run(
 async def get_run(
     sessions: SessionsDep,
     repositories: ReposDep,
+    run_id: Annotated[str, Path(min_length=8)],
+) -> dict[str, Any]:
+    """Polled by the console after ``POST /runs`` and by the settlement-import runbook."""
+    async with sessions.begin() as session:
+        run = await repositories.reconciliation_runs.get_or_raise(session, run_id)
+        return _serialise_run(run)
+
+
+@router.post(
+    "/items/{item_id}/retry",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Retry one reconciliation item",
 )
@@ -176,6 +186,8 @@ async def retry_item(
     current state under ``details.item``, and the console's ``useRetrySettlementItem()``
     shows "already settling" and refetches rather than surfacing an error toast. Its rate
     is a signal to watch, not an error budget to burn.
+    """
+    requested_by = body.requested_by or f"console:{caller}"
     item = await retries.retry_item(item_id, requested_by=requested_by)
     if item is not None:
         logger.info(

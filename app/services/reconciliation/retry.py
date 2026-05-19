@@ -94,3 +94,35 @@ class RetryScheduler:
                 item.attempt_count += 1
                 item.last_attempt_at = self._clock.now()
                 item.status = "settling"
+
+                result = await self._poster.post_settlement(
+                    session, item, caller="retry_scheduler"
+                )
+
+                item.status = "settled"
+                item.settled_transaction_id = result.transaction_id
+                metrics.increment(
+                    "SettlementItemRetried",
+                    outcome="settled",
+                    requested_by=requested_by or "unknown",
+                )
+                return item
+
+        # Both branches run OUTSIDE the business session, in their own transaction,
+        # because the business transaction has already rolled back and everything
+        # written inside it is gone — including attempt_count. Mirrors
+        # ReconciliationService._mark_retryable.
+        except RetryableSettlementError as exc:
+            await self._mark_retryable(item_id, exc.code)
+            return None
+        except RetryExhaustedError:
+            await self._mark_failed(item_id, "retry_exhausted")
+            return None
+        except PayzenoLedgerError as exc:
+            await self._mark_failed(item_id, exc.code)
+            return None
+
+    async def _mark_retryable(self, item_id: str, code: str) -> None:
+        async with self._sessions.begin() as session:
+            item = await self._items.get_or_raise(session, item_id)
+            item.attempt_count += 1

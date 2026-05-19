@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     #: 3 x (concurrent sweeps) + drains. Production is 20 across four tasks.
     database_pool_size: int = 20
     database_pool_max_overflow: int = 10
+    #: SQL echo. Never on outside local compose — it logs bound parameters, and bound
+    #: parameters on this service include merchant identifiers.
+    database_echo: bool = False
+
     # -- internal auth -------------------------------------------------------------
     #: Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's
     #: PAYZENO_INTERNAL_SECRET. All three must match or nothing talks to us.
@@ -64,6 +68,10 @@ class Settings(BaseSettings):
 
     # -- acquirers -----------------------------------------------------------------
     worldflow_base_url: str = "http://payzeno-acquirer-sandbox:9100"
+    #: Sent as `Payzeno-Acquirer-Account`. Worldflow routes settlement files by it and
+    #: a wrong value fails open into another Payzeno account's file, so it is explicit
+    #: config rather than something derived from the base URL.
+    worldflow_acquirer_account: str = "payzeno-eu-1"
     #: BREAKER_WINDOW is a request COUNT, not a duration.
     worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
@@ -129,6 +137,19 @@ class Settings(BaseSettings):
         return value
 
     @property
+    def payout_cutoffs(self) -> dict[str, str]:
+        """The four rail cutoffs keyed by ``payout_method``.
+
+        Built here rather than in ``PayoutService`` so the rails and the scheduler read
+        the same mapping and a new rail is one field plus one key.
+        """
+        return {
+            "ach": self.payout_cutoff_ach_utc,
+            "same_day_ach": self.payout_cutoff_same_day_ach_utc,
+            "sepa": self.payout_cutoff_sepa_utc,
+            "faster_payments": self.payout_cutoff_faster_payments_utc,
+        }
+
     @property
     def alembic_database_url(self) -> str:
         """The same DSN with the sync driver, for Alembic.

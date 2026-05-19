@@ -84,9 +84,18 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     )
     matched_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Exponential backoff with jitter, written by `app/domain/backoff.py`. The drain
+    #: filters `next_attempt_at <= now()`; the pre-0024 index ordered by
+    #: `last_attempt_at` without filtering on it, which is what let four drains hammer a
+    #: degraded acquirer at up to 800 capture attempts a minute.
+    next_attempt_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
     settled_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
@@ -116,6 +125,11 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
             postgresql_where="settled_transaction_id is not null",
         ),
     )
+
+    def acquirer_markup_minor(self) -> int:
+        """``fee_minor - interchange_minor - scheme_fee_minor``, never below zero."""
+        markup = self.fee_minor - self.interchange_minor - self.scheme_fee_minor
+        return max(markup, 0)
 
     def is_terminal(self) -> bool:
         """Whether nothing will move this item without an operator."""

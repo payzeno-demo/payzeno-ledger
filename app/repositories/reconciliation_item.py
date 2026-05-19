@@ -111,6 +111,20 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         session: AsyncSession,
         *,
         limit: int,
+        now: dt.datetime | None = None,
+    ) -> list[str]:
+        """Ids of items that are due for another attempt, soonest-due first.
+
+        **Ids, not hydrated rows.** The drain re-reads each item inside its own
+        transaction with ``FOR UPDATE``; handing it objects loaded on a different session
+        would make the claim decide against data that is already stale by the time it
+        runs, and would also keep several thousand rows alive in the identity map of a
+        session the drain has finished with.
+
+        ``next_attempt_at <= now()`` is the filter that matters. The pre-``0024`` index
+        ordered by ``last_attempt_at`` and did not filter on it at all, which is how four
+        drains hammered a degraded acquirer at up to 800 capture attempts a minute during
+        exactly the degradation that caused the incident.
         """
         cutoff = now or dt.datetime.now(dt.UTC)
         stmt = (

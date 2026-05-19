@@ -55,12 +55,41 @@ class WorldflowClient(ProcessorClient):
                 "acquirer_reference": acquirer_reference,
                 "confirmed_by": "payzeno-ledger",
             },
+            headers={"Idempotency-Key": f"confirm:{batch_id}:{acquirer_reference}"},
+        )
+
+    async def capture_deferred(
+        self,
+        charge_id: str,
+        amount_minor: int,
+        currency: str,
+        reference: str,
+        *,
+        idempotency_key: str,
+    ) -> CaptureResponse:
+        """Capture an authorisation that was deliberately left uncaptured until settlement.
+
+        ``reference`` is the acquirer's network transaction id for the authorisation —
+        the value Worldflow keys its own authorisation record on.
+        """
+        response = await self._http.post(
+            f"/v2/authorizations/{reference}/captures",
             json={
                 "amount": amount_minor,
                 "currency": currency,
                 "merchant_reference": charge_id,
             },
             reference=str(body.get("reference") or idempotency_key),
+            response = await self._http.get(
+                f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
+            )
+        except UpstreamError as exc:
+            if exc.details.get("status") == 404:
+                return CaptureStatus(state="not_captured", reference=None)
+            raise
+        body = response.json()
+        state = body.get("state", "unknown")
+        if state not in ("captured", "not_captured"):
             state = "unknown"
         return CaptureStatus(state=state, reference=body.get("reference"))
 

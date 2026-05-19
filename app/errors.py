@@ -87,6 +87,23 @@ class PayzenoLedgerError(Exception):
         self.details: dict[str, Any] = details
         super().__init__(self.message)
 
+    def __repr__(self) -> str:  # pragma: no cover - debugging affordance only
+        return f"{type(self).__name__}(code={self.code!r}, details={self.details!r})"
+
+
+# ---------------------------------------------------------------------------------------
+# Request-shaped failures
+# ---------------------------------------------------------------------------------------
+
+
+class ValidationError(PayzenoLedgerError):
+    """The request is well-formed JSON and still wrong.
+
+    FastAPI's own ``RequestValidationError`` covers schema violations; this covers the
+    rules a schema cannot express — a window wider than 31 days, a ``to`` before a
+    ``from``, an adjustment with no lines.
+    """
+
     code: ClassVar[str] = "validation_failed"
     http_status: ClassVar[int] = 422
 
@@ -194,6 +211,22 @@ class CurrencyMismatchError(LedgerIntegrityError):
     """
 
     code: ClassVar[str] = "currency_mismatch"
+    http_status: ClassVar[int] = 400
+
+
+# ---------------------------------------------------------------------------------------
+# Business states that look like faults and are not
+# ---------------------------------------------------------------------------------------
+
+
+class AccountFrozenError(PayzenoLedgerError):
+    """The target account is ``frozen`` or ``closed``.
+
+    **409, not 500.** Set deliberately through ``POST /internal/v1/accounts/{id}/freeze``
+    by risk. Returning 500 for a policy decision burns the error budget, trips
+    payzeno-api's breaker for every other merchant, and pages someone who cannot fix it.
+    """
+
     code: ClassVar[str] = "account_frozen"
     http_status: ClassVar[int] = 409
 
@@ -241,6 +274,17 @@ class OrphanedItemError(SettlementError):
     Raised in ``SettlementPoster.post_settlement`` on ``item.charge_id is None``,
     **before** ``SettlementChargeRepository.get_or_raise``, so an unmatched acquirer line
     reports itself as unmatched rather than as a missing projection.
+    """
+
+    code: ClassVar[str] = "retryable_settlement"
+
+
+class SettlementVarianceExceededError(SettlementError):
+    """``abs(variance_minor)`` is over the merchant's settlement tolerance.
+
+    A real money difference between what the acquirer says it settled and what we
+    expected. Never auto-posted; ``settlement.variance_detected`` goes out and a human
+    resolves it through the ops match endpoint.
     """
 
     code: ClassVar[str] = "settlement_variance_exceeded"
