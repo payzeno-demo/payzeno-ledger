@@ -75,6 +75,7 @@ def item():
         merchant_id="mer_post",
         gross_minor=10_000,
         fee_minor=290,
+        net_minor=9_710,
         variance_minor=0,
         batch_id="sb_post",
         merchant_id="mer_post",
@@ -154,6 +155,7 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
     deferred = make_item(
         item_id="ri_deferred",
         batch_id="sb_post",
+        merchant_id="mer_post",
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
 
@@ -166,7 +168,9 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
 async def test_capture_carries_a_deterministic_idempotency_key(wired, charges) -> None:
     charges.seed(make_charge_projection(charge_id="ch_key", capture_at_settlement=True))
     line = make_item(
+        item_id="ri_refund",
         charge_id="ch_post",
+        net_minor=4_000,
     )
     poster, _, _, _ = build(*wired)
 

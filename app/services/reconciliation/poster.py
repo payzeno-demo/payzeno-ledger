@@ -122,10 +122,12 @@ class SettlementPoster:
                 reserve_bps=charge.reserve_bps,
                 platform_fee_bps=charge.platform_fee_bps,
                 acquirer=item.acquirer,
+                acquirer_reference=item.acquirer_reference,
                 amount_minor=item.gross_minor,
                 reference=item.acquirer_reference,
                 acquirer=item.acquirer,
                 code=code,
                 item_id=item.id,
+                batch_id=item.batch_id,
             )
         return exc
