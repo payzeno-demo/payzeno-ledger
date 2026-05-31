@@ -126,6 +126,7 @@ class SettlementPoster:
                 acquirer=item.acquirer,
                 acquirer_reference=item.acquirer_reference,
                 amount_minor=item.gross_minor,
+                currency=item.currency,
                 reference=item.acquirer_reference,
                 acquirer=item.acquirer,
                 code=code,

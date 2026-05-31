@@ -60,8 +60,10 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
     poster = SettlementPoster(
         transactions=transactions,
         charges=charges,
+        merchants=merchants,
         ledger=ledger,
         flags=flags or StaticFeatureFlags({"duplicate_settlement_alarm": True}),
+        metrics=metrics,
         clock=FrozenClock(NOW),
     )
     return poster, processor, publisher, metrics
@@ -170,6 +172,7 @@ async def test_capture_carries_a_deterministic_idempotency_key(wired, charges) -
     line = make_item(
         item_id="ri_refund",
         charge_id="ch_post",
+        gross_minor=4_000,
         net_minor=4_000,
     )
     poster, _, _, _ = build(*wired)
