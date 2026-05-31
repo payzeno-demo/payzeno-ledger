@@ -30,6 +30,7 @@ class NordpayClient(ProcessorClient):
         self._settings = settings
         self._http = LedgerHttpxClient(
             base_url=settings.nordpay_base_url,
+            api_key=settings.nordpay_api_key,
             acquirer=ACQUIRER,
             acquirer_account=settings.nordpay_acquirer_account,
             json={
@@ -60,6 +61,11 @@ class NordpayClient(ProcessorClient):
         body = response.json()
         return CaptureResponse(
             captured=bool(body.get("captured", True)),
+            captured_at=_parse_timestamp(body.get("captured_at")),
+        )
+
+    async def get_capture_status(self, acquirer: str, idempotency_key: str) -> CaptureStatus:
+        try:
             response = await self._http.get(
                 f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
             )
@@ -70,4 +76,30 @@ class NordpayClient(ProcessorClient):
         body = response.json()
         state = body.get("state", "unknown")
         if state not in ("captured", "not_captured"):
+            state = "unknown"
+        return CaptureStatus(state=state, reference=body.get("reference"))
+
+    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+        response = await self._http.get(
+            "/v2/settlement-files", params={"date": processing_date.isoformat()}
+        )
+        return response.content
+
+    async def health_check(self) -> bool:
+        try:
+            await self._http.get("/v2/health")
+        except (UpstreamError, ProcessorIndeterminateError):
+            return False
+        return True
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+
+def _parse_timestamp(raw: object) -> datetime:
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("acquirer_bad_timestamp", acquirer=ACQUIRER, value=raw)
     return datetime.now(tz=timezone.utc)
