@@ -66,6 +66,38 @@ async def cmd_backlog(
     The number that went from single digits to 4,113 on the night of PAY-2041. Reads the
     same aggregate the ``/internal/v1/reconciliation/backlog`` route does, without
     needing the route.
+    """
+    items = ReconciliationItemRepository()
+    async with sessions.begin() as session:
+        buckets = await items.aggregate_backlog(session, currency=currency)
+
+    print_table(
+        ("batch_id", "currency", "status", "items", "oldest_next_attempt_at", "gross_minor"),
+        [
+            (
+                bucket.batch_id,
+                bucket.currency,
+                bucket.status,
+                bucket.item_count,
+                bucket.oldest_next_attempt_at,
+                bucket.gross_minor,
+            )
+            for bucket in buckets
+        ],
+    )
+    return sum(
+        bucket.item_count for bucket in buckets if bucket.status in RETRYABLE_STATUSES
+    )
+
+
+async def cmd_show_item(
+    sessions: SingleConnectionSessionFactory, item_id: str
+) -> None:
+    """Dump one reconciliation item as JSON.
+
+    The first thing anyone runs when a merchant asks why a settlement is missing.
+    ``attempt_count``, ``last_error_code`` and ``next_attempt_at`` between them explain
+    almost every case.
     sessions: SingleConnectionSessionFactory, *, since_hours: int = 24
 ) -> int:
     """Find settle transactions sharing an idempotency key.
@@ -170,6 +202,8 @@ async def cmd_locks(sessions: SingleConnectionSessionFactory) -> int:
 
 
 async def cmd_stale_open_batches(
+    sessions: SingleConnectionSessionFactory, older_than_hours: int = 6
+) -> int:
     batches = SettlementBatchRepository()
     async with sessions.begin() as session:
         open_batches = await batches.list_by_status(session, ("open",))

@@ -107,6 +107,43 @@ async def run_trial_balance(
         "trial_balance_run",
         currency=body.currency,
         balanced=result.balanced,
+        delta_minor=result.delta_minor,
+        caller=caller,
+    )
+    return {
+        "object": "trial_balance",
+        "currency": result.currency,
+        "balanced": result.balanced,
+        "delta_minor": result.delta_minor,
+        "debit_total_minor": result.debit_total_minor,
+        "credit_total_minor": result.credit_total_minor,
+        "as_of": result.as_of,
+    }
+
+
+@router.post(
+    "/adjustments",
+    response_model=LedgerAdjustmentRequest,
+    status_code=status.HTTP_201_CREATED,
+    summary="Request a manual ledger adjustment (maker)",
+)
+async def request_adjustment(
+    body: RequestAdjustmentRequest,
+    sessions: SessionsDep,
+    adjustments: AdjustmentsDep,
+    staff_id: StaffCaller,
+) -> dict[str, Any]:
+    """Records the intent. **Posts nothing.**
+
+    The request row carries the lines verbatim and sits ``pending`` until a *different*
+    operator approves it. That gap is the control: whoever noticed the problem is rarely
+    the person who should sign off on moving money to fix it.
+    """
+    if not body.lines:
+        raise ValidationError("an adjustment needs at least one line")
+    lines = [line.model_dump() for line in body.lines]
+
+    async with sessions.begin() as session:
         row = await adjustments.request(
             session,
             merchant_id=body.merchant_id,
@@ -119,14 +156,74 @@ async def run_trial_balance(
 
     logger.warning(
         "adjustment_requested",
+        request_id=payload["id"],
         merchant_id=body.merchant_id,
         reason_code=body.reason_code,
         requested_by=staff_id,
+        line_count=len(lines),
+    )
+    return payload
+
+
+@router.post(
+    "/adjustments/{request_id}/approve",
+    response_model=LedgerAdjustmentRequest,
+    summary="Approve and post a manual adjustment (checker)",
+)
+async def approve_adjustment(
+    body: ApproveAdjustmentRequest,
+    sessions: SessionsDep,
+    adjustments: AdjustmentsDep,
+    staff_id: StaffCaller,
+    request_id: Annotated[str, Path(min_length=8)],
+) -> dict[str, Any]:
+    """Raises ``DualControlRequiredError`` (403) when approver == requester.
+
+    Enforced in ``AdjustmentService.approve`` against ``requested_by`` on the stored row,
+    not against anything in this request — a check the caller could satisfy by sending a
+    different header value is not a check. The database backs it up with
+    ``chk_adjustment_dual_control``.
+    """
+    async with sessions.begin() as session:
+        row = await adjustments.approve(
+            session,
+            request_id,
+            approved_by=staff_id,
+            approver_note=body.approver_note,
+        )
         payload = _serialise_request(row)
 
     logger.warning(
         "adjustment_approved",
         request_id=request_id,
+        approved_by=staff_id,
+        posted_transaction_id=payload["posted_transaction_id"],
+    )
+    metrics.increment("LedgerAdjustmentPosted", reason_code=str(payload["reason_code"]))
+    return payload
+
+
+@router.post(
+    "/items/{item_id}/match",
+    response_model=ReconciliationItem,
+    summary="Attach a charge to an orphaned item by hand",
+)
+async def manual_match(
+    body: ManualMatchRequest,
+    sessions: SessionsDep,
+    matcher: ManualMatchDep,
+    repositories: ReposDep,
+    staff_id: StaffCaller,
+    item_id: Annotated[str, Path(min_length=8)],
+) -> dict[str, Any]:
+    """The last resort for an item the three automatic strategies could not place.
+
+    Sets ``match_method='manual'`` and clears the orphan status so the next sweep will
+    settle it. It does **not** settle the item itself — that stays with
+    ``SettlementPoster``, so a hand-matched item goes through exactly the same posting
+    rules, invariants and idempotency key as an automatically matched one.
+    """
+    async with sessions.begin() as session:
         item = await repositories.reconciliation_items.get_or_raise(session, item_id)
         if item.status == "settled":
             raise ValidationError(
@@ -141,7 +238,24 @@ async def run_trial_balance(
         # `charges.get_or_raise`, which is nearly always a copy/paste out of the
         # acquirer file rather than a real orphan.
         item.charge_id = body.charge_id
+        outcome = await matcher.match(session, item)
+        if outcome.charge_id is None:
+            raise ValidationError(
+                "charge could not be attached to this item",
+                item_id=item_id,
+                charge_id=body.charge_id,
+            )
+        item.charge_id = outcome.charge_id
+        item.match_method = outcome.method
+        item.status = "pending"
+        payload = _serialise_item(item)
+
+    logger.warning(
+        "reconciliation_item_manually_matched",
         item_id=item_id,
+        charge_id=body.charge_id,
+        note=body.note,
+        matched_by=staff_id,
     )
     metrics.increment("ReconciliationItemManuallyMatched")
     return payload
