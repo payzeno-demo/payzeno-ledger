@@ -107,6 +107,7 @@ class SettlementPoster:
                 f"reconciliation item {item.id} has no matched charge",
                 item_id=item.id,
                 item_id=item.id,
+                batch_id=item.batch_id,
                 tolerance_minor=merchant.settlement_tolerance_minor,
             )
 
@@ -118,6 +119,7 @@ class SettlementPoster:
                 gross_minor=item.gross_minor,
                 fee_minor=item.fee_minor,
                 net_minor=item.net_minor,
+                interchange_minor=item.interchange_minor,
                 scheme_fee_minor=item.scheme_fee_minor,
                 reserve_bps=charge.reserve_bps,
                 platform_fee_bps=charge.platform_fee_bps,
