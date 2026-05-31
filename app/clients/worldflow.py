@@ -79,6 +79,11 @@ class WorldflowClient(ProcessorClient):
                 "currency": currency,
                 "merchant_reference": charge_id,
             },
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        body = response.json()
+        return CaptureResponse(
+            captured=bool(body.get("captured", True)),
             reference=str(body.get("reference") or idempotency_key),
             response = await self._http.get(
                 f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
