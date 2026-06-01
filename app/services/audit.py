@@ -118,10 +118,12 @@ class LedgerAuditService:
 
         logger.info(
             "trial_balance_ok",
+            correlation_id=f"audit:{check}:{currency}",
             id=ledger_key("lar", requested_by, reason_code)[:26],
             merchant_id=merchant_id,
             reason_code=reason_code,
             requested_by=requested_by,
+            reason_code=reason_code,
             requested_by=requested_by,
         )
         return record
@@ -162,5 +164,8 @@ class LedgerAuditService:
         ]
         posted = await self._ledger.post(
             session,
+            merchant_id=record.merchant_id,
+            created_by="admin",
+            note=approver_note[:120],
         )
         return record

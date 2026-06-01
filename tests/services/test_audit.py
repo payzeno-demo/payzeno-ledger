@@ -42,6 +42,11 @@ class Totals:
 
 
 class DuplicateRow:
+    async def trial_balance_by_currency(
+        self, session: Any, *, currency: str, as_of: datetime
+    ) -> Totals:
+        return self.totals
+
     async def list_stale(self, session: Any, *, limit: int) -> list[CacheRow]:
         return self.rows[:limit]
 
@@ -49,6 +54,36 @@ class DuplicateRow:
 def _audit(
     transactions: StubTransactions | None = None,
     publisher = CollectingPublisher()
+    """
+    entries = StubEntries(totals=Totals(2_000_000, 2_000_000))
+    duplicates = [DuplicateRow("settle:sb_QK:ri_X", 2, "USD", "txn_2")]
+    service, _ = _audit(
+        entries=entries,
+        transactions=StubTransactions(duplicates),
+        sessions=sessions_factory,
+    )
+
+    duplicate_keys = await service.check_duplicate_settlements()
+
+    assert balanced.balanced is True
+    assert duplicate_keys == 1
+
+
+# --------------------------------------------------------------------------------------
+# duplicate settlements — invariant 1, PAY-2054
+# --------------------------------------------------------------------------------------
+
+
+async def test_duplicate_check_returns_zero_on_a_clean_ledger(sessions_factory) -> None:
+    service, publisher = _audit(sessions=sessions_factory)
+
+    assert await service.check_duplicate_settlements() == 0
+    assert publisher.event_types() == []
+
+
+async def test_duplicate_check_only_looks_at_settle_transactions(sessions_factory) -> None:
+    """
+    balances = StubBalances([CacheRow("mer_drift", "USD", 5_000)])
     entries = StubEntries(recomputed={"merchant_payable": 4_180})
     service, publisher = _audit(
         entries=entries, balances=balances, sessions=sessions_factory
@@ -57,6 +92,14 @@ def _audit(
     def __init__(self, rows: dict[str, Record] | None = None) -> None:
         self.rows = rows or {}
 
+    async def post(self, session: Any, **kwargs: Any) -> Any:
+        self.posts.append(kwargs)
+        transaction = type("Txn", (), {"id": "txn_adj_1"})()
+        return type("PostResult", (), {"transaction": transaction, "created": True})()
+
+
+def _adjustments(rows: dict[str, Record] | None = None):
+    requests = StubRequests(rows)
     """Dual control. `chk_adjustment_dual_control` says the same thing in the schema."""
     record = Record(requested_by="staff_a")
     service, _, ledger = _adjustments({record.id: record})
