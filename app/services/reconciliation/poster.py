@@ -125,6 +125,27 @@ class SettlementPoster:
                 platform_fee_bps=charge.platform_fee_bps,
                 acquirer=item.acquirer,
                 acquirer_reference=item.acquirer_reference,
+                batch_id=item.batch_id,
+            )
+        except (ProcessorUnavailableError, ProcessorIndeterminateError) as exc:
+            raise self._translate(exc, item) from exc
+
+    async def _capture(self, item: ReconciliationItem, charge: object) -> None:
+        """Charge the cardholder for a ``capture_at_settlement`` merchant.
+
+        The idempotency key is derived from the business fact — batch and charge — and
+        never from an attempt counter, so both acquirers can recognise a repeat.
+
+        This is still an external HTTP call inside an open database transaction. If that
+        transaction later aborts — deadlock, statement timeout, pool reset, task kill —
+        the claim rolls back and the cardholder has been charged with no ledger row behind
+        it. PAY-2060 is the split into a committed ``capture_attempt`` row plus
+        ``DeferredCaptureJob``; that job owns anything indeterminate, and this path owns
+        only the clean case.
+        """
+        try:
+            await self._processor.capture_deferred(
+                charge_id=getattr(charge, "charge_id"),
                 amount_minor=item.gross_minor,
                 currency=item.currency,
                 reference=item.acquirer_reference,
