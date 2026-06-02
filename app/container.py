@@ -249,6 +249,7 @@ class Container:
             sessions=self.sessions,
             items=repos.items,
             batches=repos.batches,
+            runs=repos.runs,
             clock=self.clock,
         )
 
@@ -286,6 +287,7 @@ class Container:
         )
         self.ach_puller = AchPayoutPuller(
             banks=repos.banks,
+            ledger=self.ledger_poster,
             calendar=self.calendar,
             settings=settings,
             sessions=self.sessions,
@@ -322,6 +324,7 @@ class Container:
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
             processed=repos.processed_events,
+            settings=settings,
             charges=repos.charges,
             transactions=repos.transactions,
             clock=self.clock,
@@ -332,6 +335,7 @@ class Container:
             sqs_client_factory=sqs_factory,
             settings=settings,
             banks=repos.banks,
+            resolver=self.account_resolver,
             clock=self.clock,
         )
 
@@ -341,6 +345,7 @@ class Container:
         # other ten still start.
         self.reconciliation_sweep_job = ReconciliationSweepJob(
             sessions=self.sessions,
+            service=self.reconciliation_service,
             settings=settings,
         )
         self.retry_drain_job = RetryDrainJob(
@@ -370,6 +375,7 @@ class Container:
             sessions=self.sessions,
             puller=self.ach_puller,
             repositories=repos,
+            clock=self.clock,
             settings=settings,
         )
         self.ledger_audit_job = LedgerAuditJob(audit=self.audit_service, settings=settings)
