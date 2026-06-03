@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     #: BREAKER_WINDOW is a request COUNT, not a duration.
     worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
+    worldflow_breaker_reset_seconds: int = 30
+
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_api_key: str = "sandbox_np_0000000000000000"
     nordpay_acquirer_account: str = "payzeno-uk-1"
@@ -91,6 +93,8 @@ class Settings(BaseSettings):
     #: default value baked into the module — it is not the read path, and collapsing the
     #: two would make this env var dead and the knob unturnable at 01:44.
     reconcile_max_attempts: int = 5
+    reconcile_retry_backoff_base_seconds: int = 30
+
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
