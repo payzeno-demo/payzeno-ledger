@@ -75,13 +75,16 @@ def item():
         item_id="ri_post",
         batch_id="sb_post",
         merchant_id="mer_post",
+        status="retryable",
         gross_minor=10_000,
         fee_minor=290,
         net_minor=9_710,
         variance_minor=0,
         batch_id="sb_post",
+        charge_id="ch_post",
         merchant_id="mer_post",
         gross_minor=413,
+        fee_minor=413,
         net_minor=0,
     )
     poster, processor, _, _ = build(*wired)
@@ -170,6 +173,111 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
 async def test_capture_carries_a_deterministic_idempotency_key(wired, charges) -> None:
     charges.seed(make_charge_projection(charge_id="ch_key", capture_at_settlement=True))
     line = make_item(
+        item_id="ri_key", batch_id="sb_KEY", charge_id="ch_key", merchant_id="mer_post"
+    )
+    poster, processor, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), line, caller="batch_pass")
+
+    assert processor.capture_calls[0]["idempotency_key"] == "capture:sb_KEY:ch_key"
+
+
+async def test_losing_the_race_publishes_duplicate_detected_and_captures_nothing(
+    wired, item
+) -> None:
+    """The behaviour PR #172 bought at 03:05.
+
+    `on_conflict='return_existing'` means the second writer finds out inside one statement
+    that it lost, and the `created is False` branch skips the acquirer call entirely. Even a
+    lost race cannot reach a cardholder.
+    """
+    poster, processor, publisher, _ = build(*wired)
+
+    first = await poster.post_settlement(object(), item, caller="batch_pass")
+    second = await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    assert first.created is True
+    assert second.created is False
+    assert second.transaction_id == first.transaction_id
+    assert processor.capture_calls == []
+    assert publisher.event_types() == ["settlement.item_settled", "settlement.duplicate_detected"]
+
+
+async def test_duplicate_detected_names_the_caller_that_lost(wired, item) -> None:
+    poster, _, publisher, _ = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+    await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    payload = publisher.payload_for("settlement.duplicate_detected")
+    assert payload["detected_by"] == "retry_scheduler"
+    assert payload["idempotency_key"] == f"settle:{item.batch_id}:{item.id}"
+    assert payload["existing_transaction_id"]
+    assert payload["merchant_id"] == item.merchant_id
+
+
+async def test_duplicate_detected_is_published_even_with_the_alarm_flag_off(wired, item) -> None:
+    """The flag gates the CloudWatch metric ONLY.
+
+    A flag defaulted off in front of the publish would silently disable the very alarm
+    (PAY-2055) the incident exists to produce.
+    """
+    poster, _, publisher, metrics = build(
+        *wired, flags=StaticFeatureFlags({"duplicate_settlement_alarm": False})
+    )
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+    await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    assert "settlement.duplicate_detected" in publisher.event_types()
+    assert metrics.increments == []
+
+
+async def test_the_alarm_metric_fires_when_the_flag_is_on(wired, item) -> None:
+    poster, _, _, metrics = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+    await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    assert metrics.increments[0][0] == "DuplicateSettlementDetected"
+    assert metrics.increments[0][1]["acquirer"] == item.acquirer
+
+
+async def test_the_idempotency_key_subject_is_the_item(wired, item, ledger) -> None:
+    poster, _, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert ledger.posted[0]["idempotency_key"] == f"settle:{item.batch_id}:{item.id}"
+    assert ledger.posted[0]["reference_type"] == "reconciliation_item"
+    assert ledger.posted[0]["reference_id"] == item.id
+
+
+async def test_the_ledger_post_asks_for_return_existing(wired, item, ledger) -> None:
+    poster, _, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert ledger.posted[0]["on_conflict"] == "return_existing"
+    assert ledger.posted[0]["created_by"] == "reconciliation"
+    assert ledger.posted[0]["purpose"] == "settle"
+
+
+async def test_the_publisher_is_the_outbox(wired, item) -> None:
+    # A rolled-back attempt must emit nothing. During the outage a direct SNS publisher
+    # would have emitted thousands of phantom settlement.item_settled events for items that
+    # never settled — and PAY-2055's alarm counts exactly two events per duplicated charge.
+    from app.publishers.outbox import OutboxPublisher
+
+    import inspect
+
+    signature = inspect.signature(SettlementPoster.__init__)
+    annotation = signature.parameters["publisher"].annotation
+    assert annotation in (OutboxPublisher, "OutboxPublisher")
+
+
+async def test_line_type_selects_the_rule(wired) -> None:
+    refund_line = make_item(
         item_id="ri_refund",
         charge_id="ch_post",
         gross_minor=4_000,
