@@ -62,6 +62,7 @@ class ReconcilePassStats:
     settled: int = 0
     failed: int = 0
     orphaned: int = 0
+    settled_charge_ids: list[str] = field(default_factory=list)
     posted_total_minor: int = 0
     fee_total_minor: int = 0
     net_total_minor: int = 0

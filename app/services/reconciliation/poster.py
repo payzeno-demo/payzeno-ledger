@@ -106,6 +106,7 @@ class SettlementPoster:
             raise OrphanedItemError(
                 f"reconciliation item {item.id} has no matched charge",
                 item_id=item.id,
+                batch_id=item.batch_id,
                 item_id=item.id,
                 batch_id=item.batch_id,
                 tolerance_minor=merchant.settlement_tolerance_minor,
@@ -150,6 +151,10 @@ class SettlementPoster:
                 currency=item.currency,
                 reference=item.acquirer_reference,
                 acquirer=item.acquirer,
+                error_code=code,
+            )
+            return RetryableSettlementError(
+                f"acquirer {item.acquirer} returned {code}",
                 code=code,
                 item_id=item.id,
                 batch_id=item.batch_id,
