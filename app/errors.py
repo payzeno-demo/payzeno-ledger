@@ -87,6 +87,11 @@ class PayzenoLedgerError(Exception):
         self.details: dict[str, Any] = details
         super().__init__(self.message)
 
+    def __str__(self) -> str:
+        if self.code in self.message:
+            return self.message
+        return f"{self.code}: {self.message}"
+
     def __repr__(self) -> str:  # pragma: no cover - debugging affordance only
         return f"{type(self).__name__}(code={self.code!r}, details={self.details!r})"
 
@@ -255,6 +260,7 @@ class DuplicateSettlementError(IdempotencyConflictError):
 class SettlementError(PayzenoLedgerError):
     """Base for everything the settlement/reconciliation path can refuse."""
 
+    code: ClassVar[str] = "settlement_failed"
     http_status: ClassVar[int] = 422
 
 
@@ -360,6 +366,13 @@ class DuplicateDisputeError(PayzenoLedgerError):
     dedupes by ``event_id``; this catches the case where the *upstream* emitted two
     distinct events for one dispute, which Worldflow does on re-presentment.
     """
+
+    code: ClassVar[str] = "duplicate_dispute"
+    http_status: ClassVar[int] = 409
+
+
+class UpstreamError(PayzenoLedgerError):
+    """Something outside this service failed. Nothing here is the ledger's fault."""
 
     code: ClassVar[str] = "internal_error"
     http_status: ClassVar[int] = 502
