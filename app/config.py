@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # -- database ------------------------------------------------------------------
+    database_url: str = Field(
+        default="postgresql+asyncpg://payzeno:payzeno@localhost:5432/payzeno_ledger",
+        description="asyncpg DSN. Alembic rewrites it to the sync driver itself.",
+    )
     #: Read the comment in .env.example before lowering this. `reconcile_batch` holds
     #: three sessions in one pass and `RetryDrainJob` takes a fourth, so the floor is
     #: 3 x (concurrent sweeps) + drains. Production is 20 across four tasks.
@@ -68,6 +73,7 @@ class Settings(BaseSettings):
 
     # -- acquirers -----------------------------------------------------------------
     worldflow_base_url: str = "http://payzeno-acquirer-sandbox:9100"
+    worldflow_api_key: str = "sandbox_wf_0000000000000000"
     #: Sent as `Payzeno-Acquirer-Account`. Worldflow routes settlement files by it and
     #: a wrong value fails open into another Payzeno account's file, so it is explicit
     #: config rather than something derived from the base URL.
@@ -75,6 +81,8 @@ class Settings(BaseSettings):
     #: BREAKER_WINDOW is a request COUNT, not a duration.
     worldflow_breaker_threshold_pct: int = 50
     worldflow_breaker_window: int = 100
+    worldflow_breaker_reset_seconds: int = 30
+
     nordpay_base_url: str = "http://payzeno-acquirer-sandbox:9101"
     nordpay_api_key: str = "sandbox_np_0000000000000000"
     nordpay_acquirer_account: str = "payzeno-uk-1"
@@ -91,6 +99,8 @@ class Settings(BaseSettings):
     #: default value baked into the module — it is not the read path, and collapsing the
     #: two would make this env var dead and the knob unturnable at 01:44.
     reconcile_max_attempts: int = 5
+    reconcile_retry_backoff_base_seconds: int = 30
+
     # -- retry drain ---------------------------------------------------------------
     retry_drain_interval_seconds: int = 60
     retry_drain_batch_size: int = 50
@@ -114,6 +124,7 @@ class Settings(BaseSettings):
     #: event is published unconditionally — a flag in front of the publish would
     #: silently disable the alarm the whole of PAY-2055 exists to produce.
     flag_duplicate_settlement_alarm: bool = True
+    flag_payout_same_day_ach: bool = False
     #: arc PCI. Non-removable: compliance signed off on the assumption it is always on.
     flag_redact_pan_in_logs: bool = True
 
