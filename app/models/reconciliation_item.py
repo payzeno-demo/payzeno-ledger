@@ -63,15 +63,20 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     #: and adjustment lines have no charge. SettlementPoster's orphan guard runs BEFORE
     #: the projection read for exactly this reason.
     charge_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    merchant_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     #: Added by 0024. Dispatches through POSTING_RULE_BY_LINE_TYPE; without it every
     #: refund, chargeback and fee line matches no charge and lands in `orphaned`.
     line_type: Mapped[str] = mapped_column(
         reconciliation_line_type_enum, nullable=False, server_default="sale"
     )
 
+    gross_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
     fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     scheme_fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    net_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
     #: From the matched `settlement_charge`; null while unmatched. Migration 0026.
     expected_gross_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
