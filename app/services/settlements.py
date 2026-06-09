@@ -121,6 +121,7 @@ class SettlementService:
                 "expected_total_minor": batch.expected_total_minor,
                 "closed_at": batch.closed_at.isoformat(),
             },
+            merchant_id=None,
             correlation_id=batch.id,
             batch_id=batch.id,
             expected_total_minor=batch.expected_total_minor,
@@ -151,6 +152,7 @@ class SettlementService:
         batch = await self.open_batch(
             session,
             acquirer=acquirer,
+            processing_date=processing_date,
             file_reference=file_reference,
         )
 
@@ -206,6 +208,9 @@ class SettlementService:
                 processing_date=processing_date,
                 file_reference=file_reference,
             )
+            items = self._build_items(batch, parsed)
+            await self._items.add_all(session, items)
+            await match_items(session, items, self._strategies, clock=self._clock)
             batch_id = batch.id
 
         async with self._sessions.begin() as session:

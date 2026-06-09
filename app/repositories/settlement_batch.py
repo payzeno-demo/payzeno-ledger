@@ -62,6 +62,8 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         """
         if not statuses:
             return []
+        *,
+        acquirer: str | None = None,
         currency: str | None = None,
         on_or_before: dt.date | None = None,
         limit: int = 200,
