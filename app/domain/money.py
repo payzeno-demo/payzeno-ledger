@@ -57,6 +57,19 @@ class Money:
 
 
 @dataclass(frozen=True, slots=True)
+class FeeComponent:
+    """One addend of a composite fee.
+
+    ``bps`` and ``fixed_minor`` are applied together: ``gross * bps / 10_000 + fixed_minor``.
+    ``name`` is the component key that comes back in :class:`FeeBreakdown.components`.
+    """
+
+    name: str
+    bps: int
+    fixed_minor: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class FeeBreakdown:
     """The result of apportioning one fee across several components.
 
@@ -109,6 +122,11 @@ def sub_money(a: Money, b: Money) -> Money:
     return Money(amount_minor=a.amount_minor - b.amount_minor, currency=a.currency)
 
 
+def negate(m: Money) -> Money:
+    """Flip the sign. Used only where a caller reasons in signed deltas (balance cache)."""
+    return Money(amount_minor=-m.amount_minor, currency=m.currency)
+
+
 def apply_bps(m: Money, bps: int) -> Money:
     """Apply a basis-point rate, quantised ROUND_HALF_UP at the minor unit.
 
@@ -139,9 +157,32 @@ def to_minor(amount: str, currency: str) -> int:
     return int(scaled.quantize(_ONE, rounding=ROUND_HALF_UP))
 
 
+def from_minor(minor: int, currency: str) -> str:
+    """Render minor units as a plain decimal string with the currency's exponent."""
+    exponent = exponent_for(currency)
+    if exponent == 0:
+        return str(minor)
+    quantum = Decimal(1).scaleb(-exponent)
+    return str(Decimal(minor).scaleb(-exponent).quantize(quantum))
+
+
 def format_money(m: Money) -> str:
     """Human-readable form used in ops CLI tables and log context: ``"12.34 USD"``."""
     return f"{from_minor(m.amount_minor, m.currency)} {m.currency}"
+
+
+def require_positive(m: Money, *, field: str = "amount_minor") -> Money:
+    """Guard for ledger entries: direction carries the sign, amounts never do.
+
+    Raises :class:`NegativeAmountError`, which is what invariant 4 of `domain-model.md`
+    §7 turns into at ``LedgerPoster.post`` time.
+    """
+    if m.amount_minor <= 0:
+        raise NegativeAmountError(
+            "amount must be strictly positive",
+            details={"field": field, "amount_minor": m.amount_minor, "currency": m.currency},
+        )
+    return m
 
 
 def split_evenly(m: Money, parts: int) -> list[Money]:
