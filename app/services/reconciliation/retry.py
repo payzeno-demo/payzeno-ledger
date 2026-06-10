@@ -126,3 +126,14 @@ class RetryScheduler:
         async with self._sessions.begin() as session:
             item = await self._items.get_or_raise(session, item_id)
             item.attempt_count += 1
+            item.last_attempt_at = self._clock.now()
+            item.last_error_code = code
+            item.status = "retryable"
+            item.next_attempt_at = self._backoff(item.attempt_count)
+        metrics.increment("SettlementItemRetried", outcome="retryable", error_code=code)
+
+    async def _mark_failed(self, item_id: str, code: str) -> None:
+        async with self._sessions.begin() as session:
+            item = await self._items.get_or_raise(session, item_id)
+            item.attempt_count += 1
+            item.last_attempt_at = self._clock.now()
