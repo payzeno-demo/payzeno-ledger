@@ -76,6 +76,7 @@ def item():
     return make_item(
         item_id="ri_post",
         batch_id="sb_post",
+        charge_id="ch_post",
         merchant_id="mer_post",
         status="retryable",
         gross_minor=10_000,
@@ -332,7 +333,9 @@ async def test_the_publisher_is_the_outbox(wired, item) -> None:
 async def test_line_type_selects_the_rule(wired) -> None:
     refund_line = make_item(
         item_id="ri_refund",
+        batch_id="sb_post",
         charge_id="ch_post",
+        merchant_id="mer_post",
         line_type="refund",
         gross_minor=4_000,
         net_minor=4_000,

@@ -97,6 +97,27 @@ def build(
 ) -> tuple[RetryScheduler, CollectingPublisher, FakeLocks]:
     publisher = CollectingPublisher()
     lock_manager = locks or FakeLocks()
+    scheduler = RetryScheduler(
+        sessions=sessions_factory,
+        items=items,
+        poster=poster,
+        publisher=publisher,
+        clock=FrozenClock(NOW),
+        flags=StaticFeatureFlags({}),
+        locks=lock_manager,
+        settings=Settings(),
+    )
+    return scheduler, publisher, lock_manager
+
+
+# --------------------------------------------------------------------------------------
+# _claim_item — the function PR #171 changed
+# --------------------------------------------------------------------------------------
+
+
+async def test_claim_item_takes_the_batch_lock_before_the_row_lock(
+    sessions_factory, items, seeded_item
+) -> None:
     claimed = await scheduler._claim_item(sessions_factory.session, seeded_item.id)
 
     assert claimed is not None
@@ -232,6 +253,14 @@ async def test_backoff_grows_with_attempt_count(sessions_factory, items, seeded_
     seeded_item.status = "retryable"
 
     await scheduler.retry_item(seeded_item.id)
+    second_delay = (seeded_item.next_attempt_at - NOW).total_seconds()
+
+    assert second_delay > first_delay
+
+
+async def test_non_retryable_error_marks_the_item_failed(
+    sessions_factory, items, seeded_item
+) -> None:
     poster = StubPoster(raises=OrphanedItemError(item_id="ri_svc"))
     scheduler, _, _ = build(sessions_factory, items, poster)
 
@@ -377,3 +406,7 @@ async def test_drain_counts_only_the_items_it_actually_settled(
 
 
 async def test_drain_of_an_empty_backlog_is_zero(sessions_factory, items) -> None:
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    assert await scheduler.drain(limit=200) == 0

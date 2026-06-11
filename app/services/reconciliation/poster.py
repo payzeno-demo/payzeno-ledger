@@ -109,6 +109,7 @@ class SettlementPoster:
                 batch_id=item.batch_id,
                 item_id=item.id,
                 batch_id=item.batch_id,
+                variance_minor=item.variance_minor,
                 tolerance_minor=merchant.settlement_tolerance_minor,
             )
 
@@ -270,6 +271,76 @@ class SettlementPoster:
                 amount_minor=item.gross_minor,
                 currency=item.currency,
                 reference=item.acquirer_reference,
+                idempotency_key=ledger_key("capture", item.batch_id, item.charge_id),
+            )
+        except (ProcessorUnavailableError, ProcessorIndeterminateError) as exc:
+            raise self._translate(exc, item) from exc
+
+    async def _publish_variance(
+        self,
+        session: AsyncSession,
+        item: ReconciliationItem,
+        tolerance_minor: int,
+    ) -> None:
+        """Emit ``settlement.variance_detected`` before refusing the line.
+
+        Published rather than merely logged because the resolution is human: an operator
+        works the variance off the console's settlement explorer and closes it through
+        ``POST /internal/v1/ops/items/{id}/match``.
+        """
+        await self._publisher.publish(
+            "settlement.variance_detected",
+            {
+                "batch_id": item.batch_id,
+                "item_id": item.id,
+                "charge_id": item.charge_id,
+                "merchant_id": item.merchant_id,
+                "line_type": item.line_type,
+                "expected_gross_minor": item.expected_gross_minor,
+                "actual_gross_minor": item.gross_minor,
+                "variance_minor": item.variance_minor,
+                "tolerance_minor": tolerance_minor,
+                "currency": item.currency,
+                "detected_at": self._stamp(item),
+            },
+            merchant_id=item.merchant_id,
+            correlation_id=item.id,
+            session=session,
+            livemode=item.livemode,
+        )
+        default_metrics.increment("SettlementVarianceDetected", acquirer=item.acquirer)
+
+    def _stamp(self, item: ReconciliationItem) -> str:
+        """Detection/settlement time, as an ISO string.
+
+        Prefers the injected clock. Falls back to the item's own ``last_attempt_at``,
+        which both callers stamp before calling — the poster was originally written with
+        no clock at all, as a pure collaborator of whichever caller opened the
+        transaction, and one integration fixture still constructs it that way.
+        """
+        if self._clock is not None:
+            return self._clock.now().isoformat()
+        stamped = item.last_attempt_at
+        return stamped.isoformat() if stamped is not None else ""
+
+    @staticmethod
+    def _translate(
+        exc: ProcessorUnavailableError | ProcessorIndeterminateError,
+        item: ReconciliationItem,
+    ) -> Exception:
+        """Retryable codes become ``RetryableSettlementError``; everything else does not.
+
+        The asymmetry is PAY-2060. ``processor_timeout`` used to live in
+        ``RETRYABLE_ERROR_CODES``, so a timed-out *capture* was re-issued blindly — a
+        second double-charge mechanism, independent of PAY-2041 and untouched by either
+        fix for it. It now sits in ``INDETERMINATE_ERROR_CODES`` and falls through here
+        unchanged, so the item fails rather than retries and ``DeferredCaptureJob``
+        resolves it through ``get_capture_status``.
+        """
+        code = getattr(exc, "code", "processor_unavailable")
+        if code in RETRYABLE_ERROR_CODES:
+            logger.warning(
+                "settlement_item_retryable",
                 acquirer=item.acquirer,
                 error_code=code,
             )
