@@ -109,12 +109,14 @@ class SettlementPoster:
                 batch_id=item.batch_id,
                 item_id=item.id,
                 batch_id=item.batch_id,
+                variance_minor=item.variance_minor,
                 tolerance_minor=merchant.settlement_tolerance_minor,
             )
 
         rule = POSTING_RULE_BY_LINE_TYPE[item.line_type]
         lines = rule.build(
             PostingContext(
+                merchant_id=item.merchant_id,
                 currency=item.currency,
                 livemode=item.livemode,
                 gross_minor=item.gross_minor,
@@ -124,6 +126,125 @@ class SettlementPoster:
                 scheme_fee_minor=item.scheme_fee_minor,
                 reserve_bps=charge.reserve_bps,
                 platform_fee_bps=charge.platform_fee_bps,
+                platform_fee_fixed_minor=charge.platform_fee_fixed_minor,
+            )
+        )
+        rule.validate(lines)
+
+        # The claim and the insert, in one statement. `on_conflict='return_existing'` is
+        # what makes the second caller find out it lost *inside* the write, rather than
+        # by reading beforehand and hoping nothing changed in between.
+        posted = await self._ledger.post(
+            session,
+            idempotency_key=key,
+            purpose="settle",
+            merchant_id=item.merchant_id,
+            currency=item.currency,
+            livemode=item.livemode,
+            reference_type="reconciliation_item",
+            reference_id=item.id,
+            lines=lines,
+            created_by="reconciliation",
+            request_fingerprint=fingerprint_of(item),
+            on_conflict="return_existing",
+        )
+
+        if not posted.created:
+            await self._publish_duplicate(
+                session, item, key=key, existing=posted, caller=caller
+            )
+            return SettlementResult(transaction_id=posted.transaction.id, created=False)
+
+        # AFTER the claim, and only when we won it. This ordering is the whole point of
+        # PR #172: the cardholder is reached exactly once per settled item, or not at all.
+        if charge.capture_at_settlement:
+            await self._capture(item, charge)
+
+        await self._publisher.publish(
+            "settlement.item_settled",
+            {
+                "item_id": item.id,
+                "batch_id": item.batch_id,
+                "charge_id": item.charge_id,
+                "merchant_id": item.merchant_id,
+                "gross_minor": item.gross_minor,
+                "fee_minor": item.fee_minor,
+                "net_minor": item.net_minor,
+                "currency": item.currency,
+                "transaction_id": posted.transaction.id,
+                "attempt_count": item.attempt_count,
+                "settled_at": self._stamp(item),
+            },
+            merchant_id=item.merchant_id,
+            correlation_id=item.id,
+            session=session,
+            livemode=item.livemode,
+        )
+        default_metrics.increment(
+            "SettlementItemPosted", acquirer=item.acquirer, caller=caller
+        )
+        return SettlementResult(transaction_id=posted.transaction.id, created=True)
+
+    async def _publish_duplicate(
+        self,
+        session: AsyncSession,
+        item: ReconciliationItem,
+        *,
+        key: str,
+        existing: Any,
+        caller: str,
+    ) -> None:
+        """Announce that this caller lost the race. **Unconditionally.**
+
+        The ``duplicate_settlement_alarm`` flag below gates the CloudWatch custom metric
+        and nothing else. A flag in front of *this publish* would silently disable
+        PAY-2055 — the alarm the whole incident exists to produce — and it would do so
+        quietly, because a missing alarm looks exactly like a healthy service.
+
+        ``detected_by`` comes off the ``caller`` argument. One shared instance serves both
+        paths, so an instance attribute could not tell you which one lost.
+        """
+        await self._publisher.publish(
+            "settlement.duplicate_detected",
+            {
+                "batch_id": item.batch_id,
+                "item_id": item.id,
+                "charge_id": item.charge_id,
+                "merchant_id": item.merchant_id,
+                "idempotency_key": key,
+                "existing_transaction_id": existing.transaction.id,
+                "detected_by": caller,
+                "amount_minor": item.gross_minor,
+                "currency": item.currency,
+                "detected_at": self._stamp(item),
+            },
+            merchant_id=item.merchant_id,
+            correlation_id=item.id,
+            session=session,
+            livemode=item.livemode,
+        )
+        logger.info(
+            "settlement_duplicate_detected",
+            item_id=item.id,
+            batch_id=item.batch_id,
+            detected_by=caller,
+            existing_transaction_id=existing.transaction.id,
+        )
+        if self._flags.enabled("duplicate_settlement_alarm"):
+            self._metrics.increment(
+                "DuplicateSettlementDetected", acquirer=item.acquirer, caller=caller
+            )
+
+    async def _confirm(self, item: ReconciliationItem) -> None:
+        """Acknowledge the line with the acquirer, translating transport failure.
+
+        Any ``ProcessorUnavailableError`` whose ``code`` is retryable becomes a
+        ``RetryableSettlementError``, which both callers catch **by name** and turn into
+        ``reconciliation_item.status = 'retryable'`` with backoff. Anything indeterminate
+        passes through untranslated — see :meth:`_translate`.
+        """
+        try:
+            await self._processor.confirm_settlement(
                 acquirer=item.acquirer,
                 acquirer_reference=item.acquirer_reference,
                 batch_id=item.batch_id,
@@ -150,6 +271,76 @@ class SettlementPoster:
                 amount_minor=item.gross_minor,
                 currency=item.currency,
                 reference=item.acquirer_reference,
+                idempotency_key=ledger_key("capture", item.batch_id, item.charge_id),
+            )
+        except (ProcessorUnavailableError, ProcessorIndeterminateError) as exc:
+            raise self._translate(exc, item) from exc
+
+    async def _publish_variance(
+        self,
+        session: AsyncSession,
+        item: ReconciliationItem,
+        tolerance_minor: int,
+    ) -> None:
+        """Emit ``settlement.variance_detected`` before refusing the line.
+
+        Published rather than merely logged because the resolution is human: an operator
+        works the variance off the console's settlement explorer and closes it through
+        ``POST /internal/v1/ops/items/{id}/match``.
+        """
+        await self._publisher.publish(
+            "settlement.variance_detected",
+            {
+                "batch_id": item.batch_id,
+                "item_id": item.id,
+                "charge_id": item.charge_id,
+                "merchant_id": item.merchant_id,
+                "line_type": item.line_type,
+                "expected_gross_minor": item.expected_gross_minor,
+                "actual_gross_minor": item.gross_minor,
+                "variance_minor": item.variance_minor,
+                "tolerance_minor": tolerance_minor,
+                "currency": item.currency,
+                "detected_at": self._stamp(item),
+            },
+            merchant_id=item.merchant_id,
+            correlation_id=item.id,
+            session=session,
+            livemode=item.livemode,
+        )
+        default_metrics.increment("SettlementVarianceDetected", acquirer=item.acquirer)
+
+    def _stamp(self, item: ReconciliationItem) -> str:
+        """Detection/settlement time, as an ISO string.
+
+        Prefers the injected clock. Falls back to the item's own ``last_attempt_at``,
+        which both callers stamp before calling — the poster was originally written with
+        no clock at all, as a pure collaborator of whichever caller opened the
+        transaction, and one integration fixture still constructs it that way.
+        """
+        if self._clock is not None:
+            return self._clock.now().isoformat()
+        stamped = item.last_attempt_at
+        return stamped.isoformat() if stamped is not None else ""
+
+    @staticmethod
+    def _translate(
+        exc: ProcessorUnavailableError | ProcessorIndeterminateError,
+        item: ReconciliationItem,
+    ) -> Exception:
+        """Retryable codes become ``RetryableSettlementError``; everything else does not.
+
+        The asymmetry is PAY-2060. ``processor_timeout`` used to live in
+        ``RETRYABLE_ERROR_CODES``, so a timed-out *capture* was re-issued blindly — a
+        second double-charge mechanism, independent of PAY-2041 and untouched by either
+        fix for it. It now sits in ``INDETERMINATE_ERROR_CODES`` and falls through here
+        unchanged, so the item fails rather than retries and ``DeferredCaptureJob``
+        resolves it through ``get_capture_status``.
+        """
+        code = getattr(exc, "code", "processor_unavailable")
+        if code in RETRYABLE_ERROR_CODES:
+            logger.warning(
+                "settlement_item_retryable",
                 acquirer=item.acquirer,
                 error_code=code,
             )

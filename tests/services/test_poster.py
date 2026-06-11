@@ -62,6 +62,8 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
         charges=charges,
         merchants=merchants,
         ledger=ledger,
+        processor=processor,
+        publisher=publisher,
         flags=flags or StaticFeatureFlags({"duplicate_settlement_alarm": True}),
         metrics=metrics,
         clock=FrozenClock(NOW),
@@ -74,12 +76,48 @@ def item():
     return make_item(
         item_id="ri_post",
         batch_id="sb_post",
+        charge_id="ch_post",
         merchant_id="mer_post",
         status="retryable",
         gross_minor=10_000,
         fee_minor=290,
         net_minor=9_710,
         variance_minor=0,
+        line_type="sale",
+    )
+
+
+@pytest.fixture
+def wired(transactions, charges, merchants, ledger):
+    charges.seed(make_charge_projection(charge_id="ch_post", capture_at_settlement=False))
+    merchants.seed(make_merchant_projection(merchant_id="mer_post", settlement_tolerance_minor=100))
+    return transactions, charges, merchants, ledger
+
+
+async def test_post_settlement_returns_a_created_result(wired, item) -> None:
+    poster, processor, publisher, _ = build(*wired)
+
+    result = await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert result.created is True
+    assert result.transaction_id
+    assert publisher.event_types() == ["settlement.item_settled"]
+
+
+async def test_confirm_settlement_is_called_unconditionally_and_first(wired, item) -> None:
+    poster, processor, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert processor.confirm_calls == [
+        {"acquirer": item.acquirer, "acquirer_reference": item.acquirer_reference, "batch_id": item.batch_id}
+    ]
+    assert processor.call_order[0] == "confirm_settlement"
+
+
+async def test_confirm_settlement_runs_even_for_a_non_sale_line(wired) -> None:
+    fee_line = make_item(
+        item_id="ri_fee",
         batch_id="sb_post",
         charge_id="ch_post",
         merchant_id="mer_post",
@@ -117,6 +155,21 @@ async def test_an_indeterminate_code_is_not_retried_blindly(wired, item) -> None
     # PAY-2060. A timeout on a capture is the one state where we do not know whether the
     # cardholder was charged, so it must not go down the plain retry path.
     processor = RecordingProcessorClient(
+        confirm_raises=ProcessorUnavailableError(code="processor_timeout")
+    )
+    poster, _, _, _ = build(*wired, processor=processor)
+
+    with pytest.raises(Exception) as excinfo:
+        await poster.post_settlement(object(), item, caller="retry_scheduler")
+
+    assert not isinstance(excinfo.value, RetryableSettlementError)
+
+
+async def test_orphan_guard_precedes_the_projection_read(wired) -> None:
+    # charge_id is nullable. An unguarded get_or_raise(session, None) raises
+    # ChargeProjectionNotFoundError, which is a 404 about a charge that does not exist
+    # rather than a 422 about a line we could not match.
+    orphan = make_item(
         item_id="ri_orphan", batch_id="sb_post", charge_id=None, merchant_id="mer_post"
     )
     poster, _, _, _ = build(*wired)
@@ -160,6 +213,7 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
     deferred = make_item(
         item_id="ri_deferred",
         batch_id="sb_post",
+        charge_id="ch_deferred",
         merchant_id="mer_post",
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
@@ -279,7 +333,10 @@ async def test_the_publisher_is_the_outbox(wired, item) -> None:
 async def test_line_type_selects_the_rule(wired) -> None:
     refund_line = make_item(
         item_id="ri_refund",
+        batch_id="sb_post",
         charge_id="ch_post",
+        merchant_id="mer_post",
+        line_type="refund",
         gross_minor=4_000,
         net_minor=4_000,
     )

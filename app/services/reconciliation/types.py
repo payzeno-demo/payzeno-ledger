@@ -68,3 +68,5 @@ class ReconcilePassStats:
     net_total_minor: int = 0
 
     @property
+    def status(self) -> str:
+        return "succeeded" if self.failed == 0 else "failed"
