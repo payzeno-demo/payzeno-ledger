@@ -62,6 +62,8 @@ def build(transactions, charges, merchants, ledger, *, processor=None, flags=Non
         charges=charges,
         merchants=merchants,
         ledger=ledger,
+        processor=processor,
+        publisher=publisher,
         flags=flags or StaticFeatureFlags({"duplicate_settlement_alarm": True}),
         metrics=metrics,
         clock=FrozenClock(NOW),
@@ -80,6 +82,40 @@ def item():
         fee_minor=290,
         net_minor=9_710,
         variance_minor=0,
+        line_type="sale",
+    )
+
+
+@pytest.fixture
+def wired(transactions, charges, merchants, ledger):
+    charges.seed(make_charge_projection(charge_id="ch_post", capture_at_settlement=False))
+    merchants.seed(make_merchant_projection(merchant_id="mer_post", settlement_tolerance_minor=100))
+    return transactions, charges, merchants, ledger
+
+
+async def test_post_settlement_returns_a_created_result(wired, item) -> None:
+    poster, processor, publisher, _ = build(*wired)
+
+    result = await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert result.created is True
+    assert result.transaction_id
+    assert publisher.event_types() == ["settlement.item_settled"]
+
+
+async def test_confirm_settlement_is_called_unconditionally_and_first(wired, item) -> None:
+    poster, processor, _, _ = build(*wired)
+
+    await poster.post_settlement(object(), item, caller="batch_pass")
+
+    assert processor.confirm_calls == [
+        {"acquirer": item.acquirer, "acquirer_reference": item.acquirer_reference, "batch_id": item.batch_id}
+    ]
+    assert processor.call_order[0] == "confirm_settlement"
+
+
+async def test_confirm_settlement_runs_even_for_a_non_sale_line(wired) -> None:
+    fee_line = make_item(
         item_id="ri_fee",
         batch_id="sb_post",
         charge_id="ch_post",
@@ -176,6 +212,7 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
     deferred = make_item(
         item_id="ri_deferred",
         batch_id="sb_post",
+        charge_id="ch_deferred",
         merchant_id="mer_post",
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
