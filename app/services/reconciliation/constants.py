@@ -8,6 +8,8 @@ from typing import Final
 
 RETRYABLE_STATUSES: Final[frozenset[str]] = frozenset({"pending", "retryable"})
 TERMINAL_STATUSES: Final[frozenset[str]] = frozenset({"settled", "failed", "orphaned"})
+IN_FLIGHT_STATUSES: Final[frozenset[str]] = frozenset({"settling"})
+
 MAX_ATTEMPTS: Final[int] = 6          # default for Settings.reconcile_max_attempts
 
 # A timeout on a capture is the one state where we do NOT know whether the cardholder was
@@ -32,3 +34,6 @@ CHARGE_BEARING_LINE_TYPES: Final[frozenset[str]] = frozenset(
     {"sale", "refund", "chargeback", "chargeback_reversal"}
 )
 
+#: `settlement.completed.settled_charge_ids` is chunked at this size. payzeno-api
+#: reassembles the chunks in `settlement_completion`.
+COMPLETION_CHUNK_SIZE: Final[int] = 1000
