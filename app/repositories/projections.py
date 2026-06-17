@@ -79,6 +79,33 @@ class MerchantProjectionRepository(BaseRepository[MerchantProjection]):
     model: ClassVar[type[MerchantProjection]] = MerchantProjection
     not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
 
+    async def upsert_if_newer(
+        self, session: AsyncSession, projection: MerchantProjection
+    ) -> bool:
+        """Apply the projection unless a later event already wrote this row.
+
+        Returns False when the incoming event is older than what is stored. The stale case
+        is not hypothetical: without this guard a redelivered ``merchant.status_changed``
+        silently un-restricts a merchant that risk suspended ten minutes ago.
+        """
+        values = {column: getattr(projection, column) for column in _MERCHANT_COLUMNS}
+        values["merchant_id"] = projection.merchant_id
+        values["source_event_id"] = projection.source_event_id
+        values["source_occurred_at"] = projection.source_occurred_at
+
+        stmt = pg_insert(MerchantProjection).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["merchant_id"],
+            set_={
+                **{c: getattr(stmt.excluded, c) for c in _MERCHANT_COLUMNS},
+                "source_event_id": stmt.excluded.source_event_id,
+                "source_occurred_at": stmt.excluded.source_occurred_at,
+            },
+            where=MerchantProjection.source_occurred_at < stmt.excluded.source_occurred_at,
+        ).returning(MerchantProjection.merchant_id)
+
+        return (await session.execute(stmt)).scalar_one_or_none() is not None
+
     async def update_status_if_newer(
         self,
         session: AsyncSession,
@@ -144,6 +171,15 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
     not_found_error: ClassVar[type[BankAccountProjectionNotFoundError]] = (
         BankAccountProjectionNotFoundError
     )
+
+    def _default_order(self) -> ColumnElement[Any]:
+        return BankAccountProjection.bank_account_id
+
+    async def get(  # type: ignore[override]
+        self, session: AsyncSession, entity_id: str
+    ) -> BankAccountProjection | None:
+        """Fetch by ``bank_account_id``, this table's primary key."""
+        return await session.get(BankAccountProjection, entity_id)
 
     async def upsert_if_newer(
         self, session: AsyncSession, projection: BankAccountProjection

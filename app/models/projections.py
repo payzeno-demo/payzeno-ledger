@@ -51,12 +51,14 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
     entity_name: ClassVar[str] = "merchant_projection"
 
     merchant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     country: Mapped[str | None] = mapped_column(Country, nullable=True)
     default_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
 
     status: Mapped[str] = mapped_column(Text, nullable=False)
     risk_tier: Mapped[str] = mapped_column(Text, nullable=False)
     reserve_bps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    reserve_hold_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     pricing_model: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="blended"
     )
@@ -105,6 +107,7 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
 
     charge_id: Mapped[str] = mapped_column(Text, primary_key=True)
     merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
 
@@ -151,17 +154,24 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
         return self.captured_at is not None
 
     __tablename__ = "bank_account_projection"
+    entity_name: ClassVar[str] = "bank_account_projection"
+
     bank_account_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     country: Mapped[str] = mapped_column(Country, nullable=False)
     scheme: Mapped[str] = mapped_column(Text, nullable=False)
 
+    #: A vault token. Payzeno never holds the digits — arc PCI §11.3.
+    account_number_token: Mapped[str] = mapped_column(Text, nullable=False)
     routing_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
     iban_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
     sort_code_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
 
     status: Mapped[str] = mapped_column(Text, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
     __table_args__ = (
         Index("ix_bank_account_projection_merchant", "merchant_id", "currency"),
         # CreatePayoutRequest.bank_account_id is optional, so the ledger must be able to
