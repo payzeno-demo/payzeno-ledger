@@ -96,6 +96,7 @@ async def handle_merchant_updated(
 
     projection = MerchantProjection(
         merchant_id=data["merchant_id"],
+        country=existing.country,
         default_currency=existing.default_currency,
         status=data["status"],
         risk_tier=data["risk_tier"],
@@ -138,7 +139,16 @@ async def handle_merchant_status_changed(
         status=data["status"],
         source_event_id=event_id,
         source_occurred_at=occurred_at,
+        updated_at=clock.now(),
+    )
+    if not updated:
+        logger.info("merchant_status_stale", merchant_id=data["merchant_id"])
+        return
+    logger.info(
+        "merchant_status_changed",
+        merchant_id=data["merchant_id"],
         previous_status=data.get("previous_status"),
+        status=data["status"],
         reason=data.get("reason"),
     )
 
@@ -167,6 +177,9 @@ async def handle_bank_account_verified(
         routing_last_four=payload.get("routing_last_four"),
         iban_last_four=payload.get("iban_last_four"),
         bic=payload.get("bic"),
+        sort_code_last_four=payload.get("sort_code_last_four"),
+        status="verified",
+        is_default=bool(payload.get("is_default", False)),
         livemode=livemode,
         updated_at=clock.now(),
         source_event_id=event_id,
@@ -207,13 +220,16 @@ def _projection_from(
         default_currency=data["default_currency"],
         status=data["status"],
         risk_tier=data["risk_tier"],
+        reserve_bps=int(data.get("reserve_bps", 0)),
         platform_fee_bps=int(data["platform_fee_bps"]),
         platform_fee_fixed_minor=int(data["platform_fee_fixed_minor"]),
         payout_delay_days=int(data.get("payout_delay_days", 2)),
         settlement_tolerance_minor=int(data.get("settlement_tolerance_minor", 100)),
         capture_at_settlement=bool(data.get("capture_at_settlement", False)),
         payout_schedule=data["payout_schedule"],
+        livemode=livemode,
         updated_at=now,
+        source_event_id=event_id,
         source_occurred_at=occurred_at,
     )
 
