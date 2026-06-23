@@ -72,7 +72,44 @@ class InvoiceStagingService:
                 invoice_public_id=invoice_public_id,
                 period_start=period_start,
                 currency=currency,
+                line_index=index,
                 description=str(line.get("description", ""))[:255],
+                tax_minor=int(line.get("tax_minor", 0)),
+                staged_at=staged_at,
+            )
+            for index, line in enumerate(lines)
+        ]
+        await self._staging.add_all(session, rows)
+
+        metrics.increment("InvoiceLinesStaged", currency=currency)
+        logger.info(
+            "invoice_lines_staged",
+            merchant_id=merchant_id,
+            invoice_public_id=invoice_public_id,
+            line_count=len(rows),
+        )
+        return len(rows)
+
+    async def list_staged_lines(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = await self._staging.list_for_invoice(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
+        )
+        return [
+            {
+                "description": row.description,
+                "quantity": row.quantity,
+                "unit_amount_minor": row.unit_amount_minor,
+                "amount_minor": row.amount_minor,
+                "tax_minor": row.tax_minor,
+                "currency": row.currency,
+                "period_start": row.period_start.isoformat(),
+                "period_end": row.period_end.isoformat(),
             }
             for row in rows
         ]
