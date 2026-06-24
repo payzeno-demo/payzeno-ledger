@@ -211,7 +211,9 @@ class PayoutService:
             merchant_id=merchant_id,
             bank_account_id=bank.bank_account_id,
             amount_minor=requested,
+            currency=currency,
             status="scheduled",
+            method=method,
             statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
             livemode=True,
         )
@@ -220,6 +222,7 @@ class PayoutService:
         posted = await self._ledger.post(
             session,
             idempotency_key=ledger_key("payout", merchant_id, payout.id),
+            purpose="payout",
             merchant_id=merchant_id,
             currency=currency,
             reference_id=payout.id,
@@ -318,6 +321,8 @@ class PayoutService:
             payout.id,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
+            merchant_id=returned.merchant_id,
+            correlation_id=returned.id,
             session=session,
             livemode=returned.livemode,
         )
@@ -331,6 +336,7 @@ class PayoutService:
             currency=payout.currency,
             livemode=payout.livemode,
             reference_type="payout",
+            reference_id=payout.id,
             lines=[
                 PostingLine(
                     account_type="cash", direction="debit", amount_minor=payout.amount_minor
