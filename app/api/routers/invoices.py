@@ -87,6 +87,8 @@ async def stage_lines(
             session,
             merchant_id=body.merchant_id,
             period_start=body.period_start,
+            period_end=body.period_end,
+            currency=body.currency,
             lines=lines,
         )
     logger.info(

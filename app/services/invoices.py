@@ -65,7 +65,18 @@ class InvoiceStagingService:
             raise ValidationError(
                 "an invoice stage push carried no lines",
                 merchant_id=merchant_id,
+                invoice_public_id=invoice_public_id,
+            )
+        if len(lines) > MAX_LINES_PER_STAGE:
+            raise ValidationError(
+                "too many invoice lines in one push",
+                invoice_public_id=invoice_public_id,
                 line_count=len(lines),
+                max_lines=MAX_LINES_PER_STAGE,
+            )
+        if period_end < period_start:
+            raise ValidationError(
+                "invoice period ends before it starts",
                 invoice_public_id=invoice_public_id,
                 period_start=period_start.isoformat(),
                 merchant_id=merchant_id,
