@@ -73,6 +73,7 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     __tablename__ = "payout"
     entity_name: ClassVar[str] = "payout"
 
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
     #: payzeno-api's `bank_account.id`. Resolved through `bank_account_projection` —
     #: there is no ledger→api route on the payout path.
     bank_account_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -89,6 +90,8 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     arrival_estimate: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
     statement_descriptor: Mapped[str] = mapped_column(String(22), nullable=False)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     ledger_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
@@ -99,9 +102,39 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
         DateTime(timezone=True), nullable=True
     )
     paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     returned_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="amount_positive"),
+        # Invariant 7. A payout in failed/returned MUST carry its reversal.
+        CheckConstraint(
+            "status not in ('failed','returned') or reversal_transaction_id is not null",
+            name="reversal_present",
+        ),
+        Index(
+            "ix_payout_merchant_created",
+            "merchant_id",
+            "created_at",
+            postgresql_ops={"created_at": "DESC"},
+        ),
+        Index("ix_payout_status_available", "status", "available_on"),
+        # Unique from 0033. One in-flight payout per (merchant, currency, livemode).
+        Index(
+            "pix_payout_in_flight",
+            "merchant_id",
+            "currency",
+            "livemode",
+            unique=True,
+            postgresql_where="status in ('scheduled','in_transit')",
+        ),
+    )
+
+    def requires_reversal(self) -> bool:
+        """Whether ``chk_payout_reversal_present`` applies to this row's status."""
+        return self.status in REVERSED_STATUSES
 
     def exceeds_rail_limit(self) -> bool:
         """Whether the amount is over the rail's per-transfer ceiling.
