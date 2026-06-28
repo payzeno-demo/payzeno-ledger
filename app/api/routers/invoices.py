@@ -78,6 +78,7 @@ async def stage_lines(
     if len(body.lines) > MAX_LINES_PER_REQUEST:
         raise ValidationError(
             f"at most {MAX_LINES_PER_REQUEST} lines per request",
+            period_start=body.period_start.isoformat(),
             period_end=body.period_end.isoformat(),
         )
 
@@ -86,6 +87,7 @@ async def stage_lines(
         staged = await invoices.stage_lines(
             session,
             merchant_id=body.merchant_id,
+            invoice_public_id=body.invoice_public_id,
             period_start=body.period_start,
             period_end=body.period_end,
             currency=body.currency,
