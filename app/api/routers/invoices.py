@@ -123,6 +123,10 @@ async def list_staged_lines(
     async with sessions.begin() as session:
         lines = await invoices.list_staged_lines(
             session,
+            invoice_public_id=invoice_public_id,
+        )
+        total_minor = await invoices.staged_total_minor(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
         )
 
     logger.debug(
