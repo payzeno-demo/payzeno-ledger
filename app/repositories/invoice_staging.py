@@ -35,6 +35,27 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
     def _default_order(self) -> ColumnElement[Any]:
         return InvoiceLineStaging.id
 
+    async def list_for_invoice(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> list[InvoiceLineStaging]:
+        """Every staged line for one legacy invoice, in line order.
+
+        ``line_no`` and not ``created_at``: the Java side numbers its lines and an invoice
+        whose lines come back in insertion order reads wrong the first time somebody edits
+        line 2 and re-pushes.
+        """
+        stmt = (
+            select(InvoiceLineStaging)
+            .where(InvoiceLineStaging.merchant_id == merchant_id)
+            .where(InvoiceLineStaging.source_invoice_public_id == invoice_public_id)
+            .order_by(InvoiceLineStaging.line_no)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
     async def list_unpromoted(
         self,
         session: AsyncSession,
