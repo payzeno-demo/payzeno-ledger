@@ -32,6 +32,32 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
     """Reads and writes staged invoice lines."""
 
     model: ClassVar[type[InvoiceLineStaging]] = InvoiceLineStaging
+    def _default_order(self) -> ColumnElement[Any]:
+        return InvoiceLineStaging.id
+
+    async def list_unpromoted(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str | None = None,
+        limit: int = 200,
+    ) -> list[InvoiceLineStaging]:
+        """Lines that have not been turned into ledger postings.
+
+        Uses ``pix_invoice_line_staging_unpromoted``. Everything is unpromoted today,
+        because the promotion path does not exist — which is exactly what the partial
+        index is for once it does.
+        """
+        stmt = (
+            select(InvoiceLineStaging)
+            .where(InvoiceLineStaging.promoted.is_(False))
+            .order_by(InvoiceLineStaging.created_at)
+            .limit(limit)
+        )
+        if merchant_id is not None:
+            stmt = stmt.where(InvoiceLineStaging.merchant_id == merchant_id)
+        return list((await session.execute(stmt)).scalars().all())
+
     async def sum_for_invoice(
         self,
         session: AsyncSession,
