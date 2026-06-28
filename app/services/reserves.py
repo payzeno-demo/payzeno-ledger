@@ -44,7 +44,11 @@ class ReserveService:
         release_date = on or self._clock.now().date()
         async with self._sessions.begin() as session:
             due = await self._holds.list_due(session, on=release_date, limit=limit)
+            idempotency_key=ledger_key("reserverelease", hold.merchant_id, hold.id),
+            purpose="reserve_release",
             merchant_id=hold.merchant_id,
+            livemode=hold.livemode,
+            reference_type="reserve_hold",
             reference_id=hold.id,
             lines=[
                 PostingLine(
@@ -58,11 +62,23 @@ class ReserveService:
                     amount_minor=hold.amount_minor,
                 ),
             ],
+            created_by="system",
+            request_fingerprint=ledger_key("reservereleasefp", hold.id, hold.release_on.isoformat()),
+        )
+        hold.released_transaction_id = posted.transaction.id
+        hold.updated_at = self._clock.now()
+        metrics.increment("ReserveHoldReleased", currency=hold.currency)
+        logger.info(
+            "reserve_hold_released",
             hold_id=hold.id,
             merchant_id=hold.merchant_id,
+            amount_minor=hold.amount_minor,
+            id=ledger_key("rh", held_from_transaction_id, str(amount_minor))[:26],
             amount_minor=amount_minor,
             held_from_transaction_id=held_from_transaction_id,
             release_on=release_on,
             merchant_id=merchant_id,
+            amount_minor=amount_minor,
+            release_on=release_on.isoformat(),
         )
         return hold

@@ -76,9 +76,11 @@ class SepaPayoutInitiator(PayoutInitiator):
             "sepa_payout_initiated",
             payout_id=payout.id,
             rail_reference=rail_reference,
+            value_date=value_date.isoformat(),
             bic=bank.bic,
         )
         return InitiationResult(
             rail_reference=rail_reference,
+            arrival_estimate=arrival,
             submitted_at=submitted_at,
         )
