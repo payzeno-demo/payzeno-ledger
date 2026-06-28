@@ -38,6 +38,8 @@ class InvoiceLineStaging(Base, TimestampMixin, LivemodeMixin):
     entity_name: ClassVar[str] = "invoice_line_staging"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
+
     #: The legacy service's `invoice.public_id`. The ledger does not mint invoice ids.
     source_invoice_public_id: Mapped[str] = mapped_column(String(40), nullable=False)
     #: Nullable on purpose — see the module docstring. Numbering has not moved.
@@ -46,6 +48,17 @@ class InvoiceLineStaging(Base, TimestampMixin, LivemodeMixin):
     line_no: Mapped[int] = mapped_column(Integer, nullable=False)
 
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: The legacy side stores quantity as decimal(12,4) and there is no minor-unit
+    #: equivalent for a count, so this is the one Numeric column in payzeno_ledger.
+    quantity: Mapped[Any] = mapped_column(Numeric(12, 4), nullable=False, server_default="1")
+    unit_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tax_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    currency: Mapped[str] = mapped_column(Currency, nullable=False)
+
+    period_start: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
     #: The legacy `fee_schedule.public_id` the line was priced from, so a parity check can
     #: reconcile the ledger's own fee computation against what the biller charged. This is
     #: the column V33 was added on the Java side to supply.
@@ -60,7 +73,32 @@ class InvoiceLineStaging(Base, TimestampMixin, LivemodeMixin):
     #: True once the ledger has generated its own equivalent line. Nothing sets it yet.
     promoted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
+    __table_args__ = (
+        # The dual write is at-least-once: the Java side retries the stage call, and a
+        # duplicated line would double the invoice total after the cutover.
+        Index(
+            "uq_invoice_line_staging_source_line",
+            "source_invoice_public_id",
+            "line_no",
+            unique=True,
+        ),
+        Index(
+            "ix_invoice_line_staging_merchant_period",
+            "merchant_id",
+            "period_start",
+            postgresql_ops={"period_start": "DESC"},
+        ),
+        Index(
+            "pix_invoice_line_staging_unpromoted",
+            "created_at",
+            postgresql_where="not promoted",
+        ),
+    )
+
     def total_minor(self) -> int:
         """Line amount including tax."""
         return self.amount_minor + self.tax_minor
 
+    def natural_key(self) -> tuple[str, int]:
+        """``(source_invoice_public_id, line_no)`` — what the unique index is on."""
+        return (self.source_invoice_public_id, self.line_no)
