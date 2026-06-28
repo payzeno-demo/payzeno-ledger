@@ -78,6 +78,12 @@ async def stage_lines(
     if len(body.lines) > MAX_LINES_PER_REQUEST:
         raise ValidationError(
             f"at most {MAX_LINES_PER_REQUEST} lines per request",
+            invoice_public_id=body.invoice_public_id,
+            received=len(body.lines),
+        )
+    if body.period_end < body.period_start:
+        raise ValidationError(
+            "period_end precedes period_start",
             period_start=body.period_start.isoformat(),
             period_end=body.period_end.isoformat(),
         )
