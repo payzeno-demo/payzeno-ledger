@@ -60,6 +60,34 @@ class StubStaging:
 
 
 def _body(**kwargs: Any) -> Any:
+    payload = {
+        "merchant_id": "mer_inv",
+        "invoice_public_id": "INV-2026-0331",
+        "period_start": PERIOD_START,
+        "period_end": PERIOD_END,
+        "currency": "USD",
+        "lines": [
+            {"description": "Processing fees — March", "amount_minor": 41_820, "quantity": 1},
+            {"description": "Chargeback fees", "amount_minor": 4_500, "quantity": 3},
+        ],
+    }
+    payload.update(kwargs)
+    return type("StageLinesRequest", (), payload)()
+
+
+async def test_staging_returns_the_count(sessions_factory) -> None:
+    staging = StubStaging()
+
+    response = await stage_lines(_body(), sessions_factory, staging, CALLER)
+
+    assert response["staged"] == 2
+
+
+async def test_staging_carries_the_invoice_public_id(sessions_factory) -> None:
+    """The Java side's identifier, not ours.
+
+    The ledger does not mint invoice numbers today. If it ever does, this is the field
+    that changes meaning and this is the test that will notice.
     """
     staging = StubStaging()
 
@@ -86,6 +114,9 @@ async def test_an_empty_line_set_is_rejected(sessions_factory) -> None:
 
 
 async def test_listing_returns_what_was_staged(sessions_factory) -> None:
+    staging = StubStaging()
+    await stage_lines(_body(), sessions_factory, staging, CALLER)
+
     response = await list_staged_lines(sessions_factory, staging, "mer_inv", "INV-2026-0331")
 
     assert len(response["lines"]) == 2
@@ -93,6 +124,15 @@ async def test_listing_returns_what_was_staged(sessions_factory) -> None:
 
 
 async def test_listing_is_scoped_to_one_merchant(sessions_factory) -> None:
+    staging = StubStaging()
+    await stage_lines(_body(), sessions_factory, staging, CALLER)
+    await stage_lines(
+        _body(merchant_id="mer_other", invoice_public_id="INV-2026-0332"),
+        sessions_factory,
+        staging,
+        CALLER,
+    )
+
     response = await list_staged_lines(sessions_factory, staging, "mer_inv", "INV-2026-0331")
 
     assert len(response["lines"]) == 2
@@ -106,3 +146,22 @@ async def test_listing_an_unstaged_invoice_returns_an_empty_set(sessions_factory
     """
     staging = StubStaging()
 
+    response = await list_staged_lines(sessions_factory, staging, "mer_inv", "INV-2026-9999")
+
+    assert response["lines"] == []
+
+
+async def test_re_staging_the_same_invoice_replaces_rather_than_appends(
+    sessions_factory,
+) -> None:
+    """The Java job reruns when an invoice is regenerated.
+
+    Appending would double every line, and since nothing reads the table with the flag
+    off, nobody would find out until the cutover.
+    """
+    staging = StubStaging()
+
+    await stage_lines(_body(), sessions_factory, staging, CALLER)
+    response = await stage_lines(_body(), sessions_factory, staging, CALLER)
+
+    assert response["staged"] == 2
