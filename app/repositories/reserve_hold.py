@@ -29,6 +29,11 @@ class ReserveHoldRepository(BaseRepository[ReserveHold]):
     """Reads and writes ``reserve_hold`` rows, and reads ``banking_calendar``."""
 
     model: ClassVar[type[ReserveHold]] = ReserveHold
+    not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
+
+    def _default_order(self) -> ColumnElement[Any]:
+        return ReserveHold.id
+
     async def list_due(
         self,
         session: AsyncSession,
@@ -110,3 +115,63 @@ class ReserveHoldRepository(BaseRepository[ReserveHold]):
         await session.flush()
         return hold
 
+    async def find_by_transaction(
+        self, session: AsyncSession, transaction_id: str
+    ) -> ReserveHold | None:
+        """The hold created by one ``capture`` transaction, if any."""
+        stmt = select(ReserveHold).where(
+            ReserveHold.held_from_transaction_id == transaction_id
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def is_business_day(
+        self,
+        session: AsyncSession,
+        *,
+        day: dt.date,
+        currency: str,
+        rail: str,
+    ) -> bool | None:
+        """Whether ``day`` is a settlement day for that currency and rail.
+
+        ``None`` means the calendar has no row — the table is loaded a year ahead and a
+        miss means somebody has not run the loader, which ``BankingCalendar`` turns into a
+        loud failure rather than a weekend-shaped guess.
+
+        Keyed on ``(currency, rail, calendar_date)`` because SEPA, Faster Payments and the
+        two ACH rails are in different jurisdictions and share neither holidays nor
+        cutoffs. That is also why there is no single ``PAYOUT_CUTOFF_HOUR_UTC`` in the
+        config and four per-rail values instead.
+        """
+        stmt = (
+            select(BankingCalendarDay.is_business_day)
+            .where(BankingCalendarDay.currency == currency)
+            .where(BankingCalendarDay.rail == rail)
+            .where(BankingCalendarDay.calendar_date == day)
+        )
+        return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def list_calendar_days(
+        self,
+        session: AsyncSession,
+        *,
+        currency: str,
+        rail: str,
+        from_: dt.date,
+        to: dt.date,
+    ) -> list[BankingCalendarDay]:
+        """The calendar between two dates, ascending.
+
+        ``BankingCalendar.next_business_day`` loads a window rather than probing a day at
+        a time — a four-day Easter weekend followed by a bank holiday is five round trips
+        otherwise, on the payout scheduler's hot path.
+        """
+        stmt = (
+            select(BankingCalendarDay)
+            .where(BankingCalendarDay.currency == currency)
+            .where(BankingCalendarDay.rail == rail)
+            .where(BankingCalendarDay.calendar_date >= from_)
+            .where(BankingCalendarDay.calendar_date <= to)
+            .order_by(BankingCalendarDay.calendar_date)
+        )
+        return list((await session.execute(stmt)).scalars().all())
