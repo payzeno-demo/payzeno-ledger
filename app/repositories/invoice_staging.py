@@ -32,6 +32,8 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
     """Reads and writes staged invoice lines."""
 
     model: ClassVar[type[InvoiceLineStaging]] = InvoiceLineStaging
+    not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
+
     def _default_order(self) -> ColumnElement[Any]:
         return InvoiceLineStaging.id
 
@@ -78,6 +80,29 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
         if merchant_id is not None:
             stmt = stmt.where(InvoiceLineStaging.merchant_id == merchant_id)
         return list((await session.execute(stmt)).scalars().all())
+
+    async def mark_promoted(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+        at: dt.datetime | None = None,
+    ) -> int:
+        """Flag an invoice's lines as promoted. Returns the row count.
+
+        Called by nothing in production yet. It is here because the flag is in the schema
+        and a column with no writer is worse than an unused method — the next person reads
+        ``promoted`` and assumes something maintains it.
+        """
+        stmt = (
+            InvoiceLineStaging.__table__.update()
+            .where(InvoiceLineStaging.merchant_id == merchant_id)
+            .where(InvoiceLineStaging.source_invoice_public_id == invoice_public_id)
+            .where(InvoiceLineStaging.promoted.is_(False))
+            .values(promoted=True, updated_at=at or dt.datetime.now(dt.UTC))
+        )
+        return int((await session.execute(stmt)).rowcount or 0)
 
     async def sum_for_invoice(
         self,
