@@ -30,6 +30,10 @@ from sqlalchemy.dialects import postgresql
 
 revision = "0022"
 down_revision = "0021"
+branch_labels = None
+depends_on = None
+
+
 def upgrade() -> None:
     op.create_table(
         "invoice_line_staging",
@@ -95,3 +99,13 @@ def upgrade() -> None:
     )
 
 
+def downgrade() -> None:
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_invoice_line_staging_updated_at ON invoice_line_staging"
+    )
+    op.execute("DROP INDEX IF EXISTS pix_invoice_line_staging_unpromoted")
+    op.execute("DROP INDEX IF EXISTS ix_invoice_line_staging_merchant_period")
+    op.drop_index(
+        "uq_invoice_line_staging_source_line", table_name="invoice_line_staging"
+    )
+    op.drop_table("invoice_line_staging")
