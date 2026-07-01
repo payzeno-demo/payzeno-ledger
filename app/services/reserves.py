@@ -44,9 +44,33 @@ class ReserveService:
         release_date = on or self._clock.now().date()
         async with self._sessions.begin() as session:
             due = await self._holds.list_due(session, on=release_date, limit=limit)
+            hold_ids = [hold.id for hold in due]
+
+        released = 0
+        for hold_id in hold_ids:
+            async with self._sessions.begin() as session:
+                if await self._release_one(session, hold_id):
+                    released += 1
+
+        logger.info(
+            "reserve_release_pass",
+            release_date=release_date.isoformat(),
+            candidates=len(hold_ids),
+            released=released,
+        )
+        return released
+
+    async def _release_one(self, session: AsyncSession, hold_id: str) -> bool:
+        hold = await self._holds.get_or_raise(session, hold_id)
+        if hold.released_transaction_id is not None:
+            return False
+
+        posted = await self._ledger.post(
+            session,
             idempotency_key=ledger_key("reserverelease", hold.merchant_id, hold.id),
             purpose="reserve_release",
             merchant_id=hold.merchant_id,
+            currency=hold.currency,
             livemode=hold.livemode,
             reference_type="reserve_hold",
             reference_id=hold.id,
@@ -73,10 +97,48 @@ class ReserveService:
             hold_id=hold.id,
             merchant_id=hold.merchant_id,
             amount_minor=hold.amount_minor,
+            transaction_id=posted.transaction.id,
+        )
+        return True
+
+    async def outstanding_for_merchant(
+        self, session: AsyncSession, *, merchant_id: str, currency: str
+    ) -> int:
+        holds = await self._holds.list_outstanding(
+            session, merchant_id=merchant_id, currency=currency
+        )
+        return sum(hold.amount_minor for hold in holds)
+
+    async def create_hold(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        currency: str,
+        amount_minor: int,
+        held_from_transaction_id: str,
+        release_on: date,
+        livemode: bool,
+    ) -> ReserveHold:
+        if amount_minor <= 0:
+            raise ValidationError(
+                "reserve hold amount must be positive",
+                merchant_id=merchant_id,
+                amount_minor=amount_minor,
+            )
+        hold = ReserveHold(
             id=ledger_key("rh", held_from_transaction_id, str(amount_minor))[:26],
+            merchant_id=merchant_id,
+            currency=currency,
             amount_minor=amount_minor,
             held_from_transaction_id=held_from_transaction_id,
             release_on=release_on,
+            livemode=livemode,
+        )
+        await self._holds.add(session, hold)
+        logger.info(
+            "reserve_hold_created",
+            hold_id=hold.id,
             merchant_id=merchant_id,
             amount_minor=amount_minor,
             release_on=release_on.isoformat(),
