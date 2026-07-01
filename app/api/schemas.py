@@ -154,6 +154,31 @@ class ReverseTransactionRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=255)
 
 
+class BulkPostTransactionRequest(BaseModel):
+    """``POST /internal/v1/transactions/bulk``.
+
+    Added in month 2 for a backfill that has since finished. Nothing has called it since
+    month 5; see the route in ``app/api/routers/transactions.py``.
+    """
+
+    transactions: list[PostTransactionRequest]
+
+
+class BulkPostTransactionResponse(BaseModel):
+    posted: int
+    transaction_ids: list[str]
+
+
+class OpenSettlementBatchRequest(BaseModel):
+    """``POST /internal/v1/settlement-batches``. Sole caller: ``SettlementImportService``."""
+
+    acquirer: str
+    currency: str
+    processing_date: date
+    file_reference: str
+    livemode: bool = True
+
+
 class RecordFundingRequest(BaseModel):
     """``POST /internal/v1/settlement-batches/{batch_id}/funding``.
 
@@ -234,6 +259,15 @@ class LegacySettlementRecord(BaseModel):
     merchant_id: str | None = None
     charge_id: str | None = None
     posted_at: datetime | None = None
+
+
+class SettlementImportRequest(BaseModel):
+    """``POST /internal/v1/settlement-imports``. Called by payzeno-billing-legacy only."""
+
+    acquirer: str
+    processing_date: date
+    file_reference: str
+    records: list[LegacySettlementRecord]
 
 
 class SettlementImportResponse(BaseModel):
