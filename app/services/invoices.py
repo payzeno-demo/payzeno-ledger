@@ -79,6 +79,16 @@ class InvoiceStagingService:
                 "invoice period ends before it starts",
                 invoice_public_id=invoice_public_id,
                 period_start=period_start.isoformat(),
+                period_end=period_end.isoformat(),
+            )
+
+        await self._staging.delete_for_invoice(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
+        )
+
+        staged_at = self._clock.now()
+        rows = [
+            InvoiceLineStaging(
                 id=new_id("ils"),
                 merchant_id=merchant_id,
                 invoice_public_id=invoice_public_id,
@@ -87,6 +97,8 @@ class InvoiceStagingService:
                 currency=currency,
                 line_index=index,
                 description=str(line.get("description", ""))[:255],
+                quantity=int(line.get("quantity", 1)),
+                unit_amount_minor=int(line.get("unit_amount_minor", 0)),
                 amount_minor=int(line.get("amount_minor", 0)),
                 tax_minor=int(line.get("tax_minor", 0)),
                 staged_at=staged_at,
