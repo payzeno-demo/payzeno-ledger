@@ -32,6 +32,102 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
     """Reads and writes staged invoice lines."""
 
     model: ClassVar[type[InvoiceLineStaging]] = InvoiceLineStaging
+    not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
+
+    def _default_order(self) -> ColumnElement[Any]:
+        return InvoiceLineStaging.id
+
+    async def list_for_invoice(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> list[InvoiceLineStaging]:
+        """Every staged line for one legacy invoice, in line order.
+
+        ``line_no`` and not ``created_at``: the Java side numbers its lines and an invoice
+        whose lines come back in insertion order reads wrong the first time somebody edits
+        line 2 and re-pushes.
+        """
+        stmt = (
+            select(InvoiceLineStaging)
+            .where(InvoiceLineStaging.merchant_id == merchant_id)
+            .where(InvoiceLineStaging.source_invoice_public_id == invoice_public_id)
+            .order_by(InvoiceLineStaging.line_no)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def delete_for_invoice(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> int:
+        """Clear an invoice's staged lines. Returns how many went.
+
+        Replace-on-push: the staging service deletes and re-inserts inside one
+        transaction rather than diffing, because the Java payload is a full document and a
+        line that has been *removed* upstream has no representation in it at all. Diffing
+        would leave the deleted line staged forever.
+
+        This is one of the two deletes in this database that is not a retention job, and
+        it is only defensible because nothing downstream has read these rows yet. When
+        promotion exists, this becomes a versioned insert — noted on the ADR, not done.
+        """
+        stmt = delete(InvoiceLineStaging).where(
+            InvoiceLineStaging.merchant_id == merchant_id,
+            InvoiceLineStaging.source_invoice_public_id == invoice_public_id,
+        )
+        return int((await session.execute(stmt)).rowcount or 0)
+
+    async def list_unpromoted(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str | None = None,
+        limit: int = 200,
+    ) -> list[InvoiceLineStaging]:
+        """Lines that have not been turned into ledger postings.
+
+        Uses ``pix_invoice_line_staging_unpromoted``. Everything is unpromoted today,
+        because the promotion path does not exist — which is exactly what the partial
+        index is for once it does.
+        """
+        stmt = (
+            select(InvoiceLineStaging)
+            .where(InvoiceLineStaging.promoted.is_(False))
+            .order_by(InvoiceLineStaging.created_at)
+            .limit(limit)
+        )
+        if merchant_id is not None:
+            stmt = stmt.where(InvoiceLineStaging.merchant_id == merchant_id)
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def mark_promoted(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+        at: dt.datetime | None = None,
+    ) -> int:
+        """Flag an invoice's lines as promoted. Returns the row count.
+
+        Called by nothing in production yet. It is here because the flag is in the schema
+        and a column with no writer is worse than an unused method — the next person reads
+        ``promoted`` and assumes something maintains it.
+        """
+        stmt = (
+            InvoiceLineStaging.__table__.update()
+            .where(InvoiceLineStaging.merchant_id == merchant_id)
+            .where(InvoiceLineStaging.source_invoice_public_id == invoice_public_id)
+            .where(InvoiceLineStaging.promoted.is_(False))
+            .values(promoted=True, updated_at=at or dt.datetime.now(dt.UTC))
+        )
+        return int((await session.execute(stmt)).rowcount or 0)
+
     async def sum_for_invoice(
         self,
         session: AsyncSession,

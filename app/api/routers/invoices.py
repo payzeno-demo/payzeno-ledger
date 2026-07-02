@@ -78,6 +78,13 @@ async def stage_lines(
     if len(body.lines) > MAX_LINES_PER_REQUEST:
         raise ValidationError(
             f"at most {MAX_LINES_PER_REQUEST} lines per request",
+            invoice_public_id=body.invoice_public_id,
+            received=len(body.lines),
+        )
+    if body.period_end < body.period_start:
+        raise ValidationError(
+            "period_end precedes period_start",
+            period_start=body.period_start.isoformat(),
             period_end=body.period_end.isoformat(),
         )
 
@@ -86,7 +93,10 @@ async def stage_lines(
         staged = await invoices.stage_lines(
             session,
             merchant_id=body.merchant_id,
+            invoice_public_id=body.invoice_public_id,
             period_start=body.period_start,
+            period_end=body.period_end,
+            currency=body.currency,
             lines=lines,
         )
     logger.info(
@@ -119,6 +129,11 @@ async def list_staged_lines(
     async with sessions.begin() as session:
         lines = await invoices.list_staged_lines(
             session,
+            merchant_id=merchant_id,
+            invoice_public_id=invoice_public_id,
+        )
+        total_minor = await invoices.staged_total_minor(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
         )
 
     logger.debug(

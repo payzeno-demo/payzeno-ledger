@@ -233,6 +233,7 @@ class Container:
         self.reconciliation_service = ReconciliationService(
             sessions=self.sessions,
             locks=self.locks,
+            batches=repos.batches,
             items=repos.items,
             runs=repos.runs,
             poster=self.settlement_poster,
@@ -284,6 +285,7 @@ class Container:
             ),
         }
         self.payout_service = PayoutService(
+            locks=self.locks,
             payouts=repos.payouts,
             banks=repos.banks,
             calculator=self.payout_calculator,
@@ -303,6 +305,10 @@ class Container:
             fundings=repos.fundings,
             batches=repos.batches,
             publisher=self.publisher,
+            clock=self.clock,
+            tolerance_bps=settings.funding_match_tolerance_bps,
+        )
+        self.reserve_service = ReserveService(
             sessions=self.sessions,
             holds=repos.reserves,
             ledger=self.ledger_poster,
@@ -354,6 +360,7 @@ class Container:
         # other ten still start.
         self.reconciliation_sweep_job = ReconciliationSweepJob(
             sessions=self.sessions,
+            batches=repos.batches,
             service=self.reconciliation_service,
             settings=settings,
         )
@@ -377,6 +384,7 @@ class Container:
         )
         self.payout_scheduler_job = PayoutSchedulerJob(
             sessions=self.sessions,
+            payouts=self.payout_service,
             clock=self.clock,
             settings=settings,
         )

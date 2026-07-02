@@ -65,14 +65,77 @@ class InvoiceStagingService:
             raise ValidationError(
                 "an invoice stage push carried no lines",
                 merchant_id=merchant_id,
+                invoice_public_id=invoice_public_id,
+            )
+        if len(lines) > MAX_LINES_PER_STAGE:
+            raise ValidationError(
+                "too many invoice lines in one push",
+                invoice_public_id=invoice_public_id,
                 line_count=len(lines),
+                max_lines=MAX_LINES_PER_STAGE,
+            )
+        if period_end < period_start:
+            raise ValidationError(
+                "invoice period ends before it starts",
                 invoice_public_id=invoice_public_id,
                 period_start=period_start.isoformat(),
+                period_end=period_end.isoformat(),
+            )
+
+        await self._staging.delete_for_invoice(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
+        )
+
+        staged_at = self._clock.now()
+        rows = [
+            InvoiceLineStaging(
+                id=new_id("ils"),
                 merchant_id=merchant_id,
                 invoice_public_id=invoice_public_id,
                 period_start=period_start,
+                period_end=period_end,
                 currency=currency,
+                line_index=index,
                 description=str(line.get("description", ""))[:255],
+                quantity=int(line.get("quantity", 1)),
+                unit_amount_minor=int(line.get("unit_amount_minor", 0)),
+                amount_minor=int(line.get("amount_minor", 0)),
+                tax_minor=int(line.get("tax_minor", 0)),
+                staged_at=staged_at,
+            )
+            for index, line in enumerate(lines)
+        ]
+        await self._staging.add_all(session, rows)
+
+        metrics.increment("InvoiceLinesStaged", currency=currency)
+        logger.info(
+            "invoice_lines_staged",
+            merchant_id=merchant_id,
+            invoice_public_id=invoice_public_id,
+            line_count=len(rows),
+        )
+        return len(rows)
+
+    async def list_staged_lines(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = await self._staging.list_for_invoice(
+            session, merchant_id=merchant_id, invoice_public_id=invoice_public_id
+        )
+        return [
+            {
+                "description": row.description,
+                "quantity": row.quantity,
+                "unit_amount_minor": row.unit_amount_minor,
+                "amount_minor": row.amount_minor,
+                "tax_minor": row.tax_minor,
+                "currency": row.currency,
+                "period_start": row.period_start.isoformat(),
+                "period_end": row.period_end.isoformat(),
             }
             for row in rows
         ]
