@@ -79,6 +79,8 @@ class LedgerAuditJob(PeriodicJob):
                     "trial_balance_raised",
                     currency=currency,
                     currency=currency,
+                    delta_minor=result.delta_minor,
+                    debit_total_minor=result.debit_total_minor,
                 )
 
         duplicates = await self._audit.check_duplicate_settlements()

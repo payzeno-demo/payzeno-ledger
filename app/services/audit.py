@@ -118,11 +118,43 @@ class LedgerAuditService:
 
         logger.info(
             "trial_balance_ok",
+            currency=currency,
+            duplicates = await self._transactions.list_duplicate_idempotency_keys(
+                session, purpose="settle", since=window_start
+            )
+            if duplicates:
+                await self._publish_imbalance(
+                    session,
+                    check="batch_total",
+                    currency=duplicates[0].currency,
+                    expected=len(duplicates),
+                    actual=sum(row.count for row in duplicates),
+                    samples=[row.sample_transaction_id for row in duplicates[:10]],
+                )
+
+        if duplicates:
+            metrics.increment("DuplicateSettlementDetected", source="audit")
+            logger.error(
+                "duplicate_settlements_found",
+                key_count=len(duplicates),
+                since=window_start.isoformat(),
+            )
+        return len(duplicates)
+
+    async def check_balance_cache_drift(self, *, limit: int = 500) -> int:
+        """Invariant (3): the cache equals the sum of the entries behind it."""
+        drifted = 0
+        async with self._sessions.begin() as session:
             correlation_id=f"audit:{check}:{currency}",
             id=ledger_key("lar", requested_by, reason_code)[:26],
             merchant_id=merchant_id,
             reason_code=reason_code,
             requested_by=requested_by,
+            livemode=True,
+        )
+        await self._requests.add(session, record)
+        logger.info(
+            "adjustment_requested",
             reason_code=reason_code,
             requested_by=requested_by,
         )
@@ -166,6 +198,8 @@ class LedgerAuditService:
             session,
             merchant_id=record.merchant_id,
             created_by="admin",
+            request_id=record.id,
+            transaction_id=posted.transaction.id,
             note=approver_note[:120],
         )
         return record
