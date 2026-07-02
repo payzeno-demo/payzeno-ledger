@@ -58,6 +58,30 @@ class InvoiceLineStagingRepository(BaseRepository[InvoiceLineStaging]):
         )
         return list((await session.execute(stmt)).scalars().all())
 
+    async def delete_for_invoice(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        invoice_public_id: str,
+    ) -> int:
+        """Clear an invoice's staged lines. Returns how many went.
+
+        Replace-on-push: the staging service deletes and re-inserts inside one
+        transaction rather than diffing, because the Java payload is a full document and a
+        line that has been *removed* upstream has no representation in it at all. Diffing
+        would leave the deleted line staged forever.
+
+        This is one of the two deletes in this database that is not a retention job, and
+        it is only defensible because nothing downstream has read these rows yet. When
+        promotion exists, this becomes a versioned insert — noted on the ADR, not done.
+        """
+        stmt = delete(InvoiceLineStaging).where(
+            InvoiceLineStaging.merchant_id == merchant_id,
+            InvoiceLineStaging.source_invoice_public_id == invoice_public_id,
+        )
+        return int((await session.execute(stmt)).rowcount or 0)
+
     async def list_unpromoted(
         self,
         session: AsyncSession,
