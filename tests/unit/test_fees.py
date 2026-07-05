@@ -27,6 +27,12 @@ def _usd(minor: int) -> Money:
 
 def test_apportion_fee_splits_by_weight_and_conserves_the_total() -> None:
     gross = _usd(10_000)
+    components = [
+        FeeComponent(name="interchange", bps=150, fixed_minor=10),
+        FeeComponent(name="scheme_fee", bps=13, fixed_minor=0),
+        FeeComponent(name="acquirer_markup", bps=30, fixed_minor=5),
+    ]
+
     breakdown = apportion_fee(gross, components)
 
     assert isinstance(breakdown, FeeBreakdown)
@@ -88,6 +94,13 @@ def test_compute_platform_fee_rounds_half_up(
 
 
 def test_compute_platform_fee_is_exponent_aware_for_jpy() -> None:
+    # 2.9% + 30 yen on 10,000 yen. The fixed component is 30 MINOR units, and JPY's
+    # exponent is 0, so that is 30 yen — not 0.30.
+    fee = compute_platform_fee(Money(amount_minor=10_000, currency="JPY"), bps=290, fixed_minor=30)
+    assert fee == Money(amount_minor=320, currency="JPY")
+
+
+def test_compute_platform_fee_never_exceeds_the_gross() -> None:
     fee = compute_platform_fee(_usd(100), bps=20_000, fixed_minor=0)
     assert fee.amount_minor <= 100
 
