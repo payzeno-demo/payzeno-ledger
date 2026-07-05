@@ -182,9 +182,11 @@ class Container:
         # -- L5 services -------------------------------------------------------------
         self.account_resolver = AccountResolver(repos.accounts, self.clock)
         self.ledger_poster = LedgerPoster(
+            transactions=repos.transactions,
             entries=repos.entries,
             accounts=repos.accounts,
             balances=repos.balance_cache,
+            resolver=self.account_resolver,
             publisher=self.publisher,
             clock=self.clock,
         )
@@ -304,6 +306,7 @@ class Container:
             sessions=self.sessions,
             fundings=repos.fundings,
             batches=repos.batches,
+            ledger=self.ledger_poster,
             publisher=self.publisher,
             clock=self.clock,
             tolerance_bps=settings.funding_match_tolerance_bps,
@@ -328,6 +331,7 @@ class Container:
             entries=repos.entries,
             transactions=repos.transactions,
             balances=repos.balance_cache,
+            publisher=self.publisher,
             clock=self.clock,
         )
         self.adjustment_service = AdjustmentService(
@@ -349,6 +353,7 @@ class Container:
             processed=repos.processed_events,
             sqs_client_factory=sqs_factory,
             settings=settings,
+            merchants=repos.merchants,
             banks=repos.banks,
             resolver=self.account_resolver,
             clock=self.clock,
@@ -401,6 +406,7 @@ class Container:
         self.ledger_audit_job = LedgerAuditJob(audit=self.audit_service, settings=settings)
         self.outbox_drain_job = OutboxDrainJob(
             sessions=self.sessions,
+            outbox=repos.outbox,
             publisher=self.sns_publisher,
             clock=self.clock,
             settings=settings,
