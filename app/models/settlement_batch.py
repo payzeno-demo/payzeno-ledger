@@ -53,6 +53,16 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     processing_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    #: The acquirer's own file identifier. Half of `uq_settlement_batch_file`, and what
+    #: `ProcessorClient.confirm_settlement` sends back on every item.
+    file_reference: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: The sum of settled items' `net_minor`. Invariant 5 of `data-model.md` §6 compares
+    #: the two; PAY-2055's second alarm fires on posted/expected > 1.001, which is what
+    #: nobody had on the night of the incident.
+    posted_total_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
     funded_amount_minor: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default="0"
     )
@@ -68,6 +78,8 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     reconciled_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    funded_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         # An acquirer re-filing the same reference is an at-least-once delivery, not a
         # second batch. SettlementImportService leans on this to be idempotent.
@@ -97,6 +109,14 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     def is_sweepable(self) -> bool:
         """Whether ``ReconciliationSweepJob`` should pick this batch up."""
         return self.status in SWEEPABLE_STATUSES
+
+    def is_reconcilable(self) -> bool:
+        """Whether a reconciliation run may start.
+
+        ``SettlementService.close_batch`` raises :class:`BatchNotReconcilableError` for a
+        batch that is not ``open``; this is the mirror check on the run side.
+        """
+        return self.status in {"closed", "reconciling", "partially_reconciled"}
 
     def overposted_ratio(self) -> float:
         """``posted_total_minor / expected_total_minor``, or 0.0 when nothing is expected.
