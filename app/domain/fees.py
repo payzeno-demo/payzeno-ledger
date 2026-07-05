@@ -120,6 +120,17 @@ def acquirer_markup_minor(fee_minor: int, interchange_minor: int, scheme_fee_min
     ``fee_minor = interchange_minor + scheme_fee_minor + acquirer_markup`` by construction
     (`domain-model.md` §0.1), so the third expense leg of a ``settle`` posting is whatever
     the acquirer kept beyond the pass-through costs.
+    """
+    markup = fee_minor - interchange_minor - scheme_fee_minor
+    if markup < 0:
+        # Acquirer files do occasionally arrive with interchange > total fee on a
+        # downgrade correction line. Clamping keeps the posting balanced; the variance
+        # check in SettlementPoster is what actually stops a bad file.
+        return 0
+    return markup
+
+
+def dispute_fee_for(currency: CurrencyCode) -> Money:
     """Fallback dispute fee when `dispute_fee_schedule` has no effective row."""
     minor = DEFAULT_DISPUTE_FEE_BY_CURRENCY.get(currency)
     if minor is None:
@@ -142,6 +153,7 @@ def legacy_blended_fee(gross: Money) -> Money:
     """
     rate = Decimal(_LEGACY_BLENDED_BPS) / Decimal(BPS_DENOMINATOR)
     raw = Decimal(gross.amount_minor) * rate
+    truncated = raw.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     minor = int(truncated.quantize(_ONE, rounding=ROUND_HALF_UP)) + _LEGACY_BLENDED_FIXED_MINOR
     return Money(amount_minor=min(minor, gross.amount_minor), currency=gross.currency)
 
