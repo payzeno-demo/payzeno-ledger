@@ -118,6 +118,10 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         """Accumulate ``posted_total_minor`` by one item's net.
 
         Read-modify-write on a hydrated row rather than an in-place SQL ``UPDATE ... SET
+        posted_total_minor = posted_total_minor + :n``, because every caller is already
+        inside the transaction that posted the item and holds the batch advisory lock, so
+        there is no concurrent writer to lose an increment to. If that ever stops being
+        true this is the line that starts undercounting, which is why it says so here.
         """
         batch = await self.get_or_raise(session, batch_id)
         batch.posted_total_minor += amount_minor
@@ -152,6 +156,29 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         ``posted_total_minor`` is set rather than accumulated here: the pass knows its own
         total and the batch may have been partially posted by an earlier pass, so adding
         would double-count everything settled before this one.
+        """
+        batch = await self.get_or_raise(session, batch_id)
+        batch.posted_total_minor = posted_total_minor
+        batch.status = "reconciled" if fully_settled else "partially_reconciled"
+        if fully_settled:
+            batch.reconciled_at = at
+        await session.flush()
+        return batch
+
+    async def mark_funded(
+        self,
+        session: AsyncSession,
+        batch_id: str,
+        *,
+        funding_event_id: str,
+        funded_amount_minor: int,
+        at: dt.datetime,
+    ) -> SettlementBatch:
+        """Record that real money arrived for this batch.
+
+        ``funded`` is terminal and it is the only status ``PayoutCalculator`` counts. The
+        ``settlement_funding`` posting — the one and only debit of ``cash`` — happens in
+        the same transaction as this call.
         """
         batch = await self.get_or_raise(session, batch_id)
         batch.status = "funded"
