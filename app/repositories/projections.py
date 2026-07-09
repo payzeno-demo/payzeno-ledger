@@ -79,6 +79,15 @@ class MerchantProjectionRepository(BaseRepository[MerchantProjection]):
     model: ClassVar[type[MerchantProjection]] = MerchantProjection
     not_found_error: ClassVar[type[NotFoundError]] = NotFoundError
 
+    def _default_order(self) -> ColumnElement[Any]:
+        return MerchantProjection.merchant_id
+
+    async def get(  # type: ignore[override]
+        self, session: AsyncSession, entity_id: str
+    ) -> MerchantProjection | None:
+        """Fetch by ``merchant_id``, which is this table's primary key."""
+        return await session.get(MerchantProjection, entity_id)
+
     async def upsert_if_newer(
         self, session: AsyncSession, projection: MerchantProjection
     ) -> bool:
