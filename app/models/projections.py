@@ -78,10 +78,20 @@ class MerchantProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
         Boolean, nullable=False, server_default="false"
     )
     payout_schedule: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
     __table_args__ = (
         Index("ix_merchant_projection_status", "status"),
         Index("ix_merchant_projection_occurred", "source_occurred_at"),
     )
+
+    def payouts_allowed(self) -> bool:
+        """``restricted`` may charge but may not receive payouts; ``suspended`` neither.
+
+        ``PayoutService.create_payout`` raises :class:`PayoutBlockedError` when this is
+        false.
+        """
+        return self.status == "active"
 
     def is_interchange_plus(self) -> bool:
         """Whether ``apportion_fee`` applies. Blended merchants never touch it."""
@@ -112,6 +122,7 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
 
     network_transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processor_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
     capture_method: Mapped[str] = mapped_column(Text, nullable=False)
     capture_at_settlement: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
@@ -125,6 +136,8 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     captured_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
     __table_args__ = (
         Index("ix_settlement_charge_merchant", "merchant_id"),
         # Match strategy 2 (NetworkTransactionMatch) drives off this.
@@ -153,6 +166,25 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
         """Whether payzeno-api has already captured this charge itself."""
         return self.captured_at is not None
 
+    def needs_deferred_capture(self) -> bool:
+        """Whether settlement must issue the physical capture to the acquirer.
+
+        True only for the deferred-settlement MCCs (travel, lodging, car rental) whose
+        merchants are configured ``capture_at_settlement``. Eleven merchants had it on
+        during PAY-2041, and 218 of the 1,847 duplicated items belonged to them — those
+        218 are the only ones that reached a cardholder.
+        """
+        return self.capture_at_settlement and self.captured_at is None
+
+
+class BankAccountProjection(Base, LivemodeMixin, ProjectionOrderingMixin):
+    """The ledger's copy of ``payzeno_api.bank_account``, fed by ``merchant.bank_account_verified``.
+
+    Without it ``payout.bank_account_id`` is an id the ledger cannot resolve:
+    ``BankAccount`` is owned by payzeno-api, ``PayoutInitiator.initiate`` has to produce
+    an ACH/SEPA/FPS instruction, and there is no ledger→api route on the payout path.
+    """
+
     __tablename__ = "bank_account_projection"
     entity_name: ClassVar[str] = "bank_account_projection"
 
@@ -166,6 +198,7 @@ class SettlementCharge(Base, LivemodeMixin, ProjectionOrderingMixin):
     account_number_token: Mapped[str] = mapped_column(Text, nullable=False)
     routing_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
     iban_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
+    bic: Mapped[str | None] = mapped_column(String(11), nullable=True)
     sort_code_last_four: Mapped[str | None] = mapped_column(LastFour, nullable=True)
 
     status: Mapped[str] = mapped_column(Text, nullable=False)
