@@ -53,10 +53,15 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     processing_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
     #: The acquirer's own file identifier. Half of `uq_settlement_batch_file`, and what
     #: `ProcessorClient.confirm_settlement` sends back on every item.
     file_reference: Mapped[str] = mapped_column(Text, nullable=False)
 
+    #: What the file says the batch totals.
+    expected_total_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
     #: The sum of settled items' `net_minor`. Invariant 5 of `data-model.md` §6 compares
     #: the two; PAY-2055's second alarm fires on posted/expected > 1.001, which is what
     #: nobody had on the night of the incident.
@@ -66,6 +71,10 @@ class SettlementBatch(Base, TimestampMixin, LivemodeMixin):
     funded_amount_minor: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default="0"
     )
+    funding_event_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("funding_event.id", ondelete="RESTRICT"), nullable=True
+    )
+
     item_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     status: Mapped[str] = mapped_column(
         settlement_batch_status_enum, nullable=False, server_default="open"

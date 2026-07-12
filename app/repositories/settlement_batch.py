@@ -62,6 +62,16 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
         """
         if not statuses:
             return []
+        stmt = (
+            select(SettlementBatch)
+            .where(SettlementBatch.status.in_(statuses))
+            .order_by(SettlementBatch.processing_date)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_unfunded(
+        self,
+        session: AsyncSession,
         *,
         acquirer: str | None = None,
         currency: str | None = None,
