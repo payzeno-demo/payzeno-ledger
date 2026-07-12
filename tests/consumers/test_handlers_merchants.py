@@ -143,6 +143,8 @@ async def test_created_projects_the_merchant() -> None:
         merchants=merchants,
         resolver=BootstrappingResolver(),
         clock=FrozenClock(NOW),
+        event_id="evt_c1",
+        occurred_at=NOW,
         livemode=True,
     )
 
@@ -161,6 +163,7 @@ async def test_created_bootstraps_the_account_set() -> None:
         object(),
         _created_payload(),
         merchants=UpsertingMerchants(),
+        resolver=resolver,
         clock=FrozenClock(NOW),
         event_id="evt_c1",
         occurred_at=NOW,
@@ -234,6 +237,7 @@ async def test_updated_preserves_the_immutable_fields_from_the_existing_row() ->
         _created_payload(country="GB", default_currency="GBP"),
         merchants=merchants,
         resolver=BootstrappingResolver(),
+        clock=FrozenClock(NOW),
         event_id="evt_c1",
         occurred_at=EARLIER,
         livemode=True,
@@ -242,8 +246,10 @@ async def test_updated_preserves_the_immutable_fields_from_the_existing_row() ->
     await handle_merchant_updated(
         object(),
         _updated_payload(display_name="Loomcraft Ltd"),
+        merchants=merchants,
         clock=FrozenClock(NOW),
         event_id="evt_u1",
+        occurred_at=NOW,
         livemode=True,
     )
 
@@ -265,6 +271,7 @@ async def test_an_update_before_the_create_is_dropped_not_invented() -> None:
         object(),
         _updated_payload(),
         merchants=merchants,
+        clock=FrozenClock(NOW),
         event_id="evt_u_orphan",
         occurred_at=NOW,
         livemode=True,
@@ -283,9 +290,17 @@ async def test_status_change_applies_to_the_projection() -> None:
     await handle_merchant_created(
         object(),
         _created_payload(),
+        merchants=merchants,
         resolver=BootstrappingResolver(),
+        clock=FrozenClock(NOW),
         event_id="evt_c1",
         occurred_at=EARLIER,
+        livemode=True,
+    )
+
+    await handle_merchant_status_changed(
+        object(),
+        {"merchant_id": "mer_c1", "status": "restricted", "reason": "dispute_rate"},
         merchants=merchants,
         clock=FrozenClock(NOW),
         event_id="evt_s1",
@@ -303,6 +318,7 @@ async def test_a_status_change_for_an_unknown_merchant_is_a_no_op() -> None:
         object(),
         {"merchant_id": "mer_ghost", "status": "suspended"},
         merchants=merchants,
+        clock=FrozenClock(NOW),
         event_id="evt_s2",
         occurred_at=NOW,
     )
@@ -361,6 +377,7 @@ async def test_the_ledger_stores_a_token_and_a_last_four_and_nothing_else() -> N
         object(),
         _bank_payload(),
         banks=banks,
+        clock=FrozenClock(NOW),
         event_id="evt_b1",
         occurred_at=NOW,
         livemode=True,
@@ -402,6 +419,7 @@ async def test_a_non_default_account_does_not_clear_anything() -> None:
         _bank_payload(bank_account_id="ba_3", is_default=False),
         banks=banks,
         clock=FrozenClock(NOW),
+        event_id="evt_b3",
         occurred_at=NOW,
         livemode=True,
     )
