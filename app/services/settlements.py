@@ -82,6 +82,7 @@ class SettlementService:
         batch = SettlementBatch(
             id=new_id("sb"),
             acquirer=acquirer,
+            currency=currency,
             processing_date=processing_date,
             file_reference=file_reference,
             status="open",
@@ -124,6 +125,7 @@ class SettlementService:
             merchant_id=None,
             correlation_id=batch.id,
             batch_id=batch.id,
+            item_count=batch.item_count,
             expected_total_minor=batch.expected_total_minor,
         )
         return batch

@@ -98,6 +98,34 @@ async def cmd_show_item(
     The first thing anyone runs when a merchant asks why a settlement is missing.
     ``attempt_count``, ``last_error_code`` and ``next_attempt_at`` between them explain
     almost every case.
+    """
+    items = ReconciliationItemRepository()
+    async with sessions.begin() as session:
+        item = await items.get_or_raise(session, item_id)
+        snapshot = {
+            "id": item.id,
+            "batch_id": item.batch_id,
+            "charge_id": item.charge_id,
+            "merchant_id": item.merchant_id,
+            "line_type": item.line_type,
+            "status": item.status,
+            "gross_minor": item.gross_minor,
+            "fee_minor": item.fee_minor,
+            "net_minor": item.net_minor,
+            "variance_minor": item.variance_minor,
+            "currency": item.currency,
+            "acquirer_reference": item.acquirer_reference,
+            "match_method": item.match_method,
+            "attempt_count": item.attempt_count,
+            "last_error_code": item.last_error_code,
+            "last_attempt_at": str(item.last_attempt_at),
+            "next_attempt_at": str(item.next_attempt_at),
+            "settled_transaction_id": item.settled_transaction_id,
+        }
+    print(json.dumps(snapshot, indent=2, sort_keys=True))
+
+
+async def cmd_find_duplicates(
     sessions: SingleConnectionSessionFactory, *, since_hours: int = 24
 ) -> int:
     """Find settle transactions sharing an idempotency key.
@@ -110,6 +138,8 @@ async def cmd_show_item(
     Structurally impossible after migration ``0020`` made
     ``ix_ledger_transaction_idempotency_key`` unique. Kept for the historical window and
     because "impossible" is a claim worth being able to check.
+    """
+    since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     transactions = LedgerTransactionRepository()
     async with sessions.begin() as session:
         rows = await transactions.list_duplicate_idempotency_keys(session, since=since)
