@@ -54,20 +54,55 @@ async def handle_payment_authorized(
 
     projection = SettlementCharge(
         charge_id=data["charge_id"],
+        merchant_id=data["merchant_id"],
         amount_minor=data["amount_minor"],
         currency=data["currency"],
+        acquirer=data["acquirer"],
         network_transaction_id=data.get("network_transaction_id"),
+        processor_reference=data.get("processor_reference"),
         capture_method=data["capture_method"],
         capture_at_settlement=bool(data["capture_at_settlement"]),
         reserve_bps=int(data.get("reserve_bps", 0)),
+        platform_fee_bps=int(data.get("platform_fee_bps", 0)),
         platform_fee_fixed_minor=int(data.get("platform_fee_fixed_minor", 0)),
         livemode=livemode,
         authorized_at=_parse(data["authorized_at"]),
         updated_at=clock.now(),
         source_event_id=event_id,
+        source_occurred_at=occurred_at,
+    )
+    written = await charges.upsert_if_newer(session, projection)
+    if not written:
+        logger.info(
+            "settlement_charge_projection_stale",
+            charge_id=data["charge_id"],
+            source_event_id=event_id,
+        )
+        return
+
+    rule = POSTING_RULE_BY_LINE_TYPE["auth"]
+    lines = rule.build(
+        PostingContext(
+            merchant_id=data["merchant_id"],
+            currency=data["currency"],
+            livemode=livemode,
+            gross_minor=data["amount_minor"],
+            fee_minor=0,
+            net_minor=data["amount_minor"],
+            interchange_minor=0,
+            scheme_fee_minor=0,
+            reserve_bps=projection.reserve_bps,
+            platform_fee_bps=projection.platform_fee_bps,
+            platform_fee_fixed_minor=projection.platform_fee_fixed_minor,
+        )
+    )
+    await ledger.post(
+        session,
         idempotency_key=ledger_key("auth", data["merchant_id"], data["charge_id"]),
+        purpose="auth",
         merchant_id=data["merchant_id"],
         currency=data["currency"],
+        livemode=livemode,
         reference_type="charge",
         reference_id=data["charge_id"],
         lines=lines,
@@ -125,6 +160,7 @@ async def handle_payment_captured(
         idempotency_key=ledger_key("capture", data["merchant_id"], data["charge_id"]),
         purpose="capture",
         merchant_id=data["merchant_id"],
+        currency=data["currency"],
         livemode=livemode,
         reference_type="charge",
         reference_id=data["charge_id"],
@@ -166,11 +202,16 @@ async def handle_payment_canceled(
     )
     await ledger.post(
         session,
+        idempotency_key=ledger_key("authrelease", payload["merchant_id"], charge_id),
         purpose="auth_release",
+        merchant_id=payload["merchant_id"],
+        currency=payload["currency"],
         livemode=livemode,
         reference_type="charge",
         reference_id=charge_id,
         lines=lines,
+        created_by="system",
+        request_fingerprint=event_id,
         on_conflict="return_existing",
     )
 
@@ -224,6 +265,8 @@ async def handle_refund_created(
         reference_type="refund",
         reference_id=data["refund_id"],
         lines=lines,
+        created_by="system",
+        request_fingerprint=event_id,
         on_conflict="return_existing",
     )
 
@@ -274,15 +317,63 @@ async def handle_dispute_opened(
         livemode=livemode,
         reference_type="dispute",
         reference_id=data["dispute_id"],
+        lines=lines,
+        created_by="system",
+        request_fingerprint=event_id,
+    )
+    logger.info(
+        "dispute_posted",
         dispute_id=data["dispute_id"],
         merchant_id=data["merchant_id"],
+        amount_minor=data["amount_minor"],
+    )
+
+
+async def handle_dispute_closed(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    ledger: LedgerPoster,
+    event_id: str,
+    livemode: bool,
+) -> None:
+    """Reverse the dispute posting when the merchant wins; keep it when they lose."""
+    if payload.get("outcome") != "won":
+        logger.info(
+            "dispute_closed_no_reversal",
+            dispute_id=payload["dispute_id"],
+            outcome=payload.get("outcome"),
+        )
+        return
+
+    rule = POSTING_RULE_BY_LINE_TYPE["chargeback_reversal"]
+    lines = rule.build(
+        PostingContext(
+            merchant_id=payload["merchant_id"],
+            currency=payload["currency"],
+            livemode=livemode,
+            gross_minor=payload["amount_minor"],
+            fee_minor=0,
+            net_minor=payload["amount_minor"],
+            interchange_minor=0,
+            scheme_fee_minor=0,
+            reserve_bps=0,
+            platform_fee_bps=0,
+            platform_fee_fixed_minor=0,
+        )
+    )
+    await ledger.post(
+        session,
         idempotency_key=ledger_key("disputewon", payload["merchant_id"], payload["dispute_id"]),
+        purpose="dispute_reversal",
         merchant_id=payload["merchant_id"],
         currency=payload["currency"],
         livemode=livemode,
+        reference_type="dispute",
         reference_id=payload["dispute_id"],
         lines=lines,
         created_by="system",
+        request_fingerprint=event_id,
         on_conflict="return_existing",
     )
 
