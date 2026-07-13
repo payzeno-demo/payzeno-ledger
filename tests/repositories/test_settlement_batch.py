@@ -25,6 +25,19 @@ def repo() -> SettlementBatchRepository:
     return SettlementBatchRepository()
 
 
+async def test_add_and_get(session, repo: SettlementBatchRepository) -> None:
+    batch = make_batch(batch_id="sb_rb_1", acquirer="worldflow", currency="USD")
+    await repo.add(session, batch)
+    await session.flush()
+
+    assert (await repo.get_or_raise(session, "sb_rb_1")).acquirer == "worldflow"
+
+
+async def test_get_or_raise_on_a_missing_batch(session, repo: SettlementBatchRepository) -> None:
+    with pytest.raises(BatchNotFoundError):
+        await repo.get_or_raise(session, "sb_nope")
+
+
 async def test_file_reference_is_unique_per_acquirer(
     session, repo: SettlementBatchRepository
 ) -> None:

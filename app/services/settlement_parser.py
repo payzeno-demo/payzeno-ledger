@@ -167,6 +167,7 @@ class LegacyFixedWidthParser(SettlementFileParser):
             lines.append(
                 ParsedSettlementLine(
                     acquirer_reference=record[0:20].strip(),
+                    network_reference=record[20:40].strip() or None,
                     line_type=self._line_type(record[40:42]),
                     gross_minor=to_minor(record[42:54].strip(), currency),
                     fee_minor=to_minor(record[54:66].strip() or "0", currency),
