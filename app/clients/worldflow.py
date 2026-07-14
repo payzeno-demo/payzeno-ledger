@@ -85,6 +85,17 @@ class WorldflowClient(ProcessorClient):
         return CaptureResponse(
             captured=bool(body.get("captured", True)),
             reference=str(body.get("reference") or idempotency_key),
+            captured_at=_parse_timestamp(body.get("captured_at")),
+        )
+
+    async def get_capture_status(self, acquirer: str, idempotency_key: str) -> CaptureStatus:
+        """Ask Worldflow what actually happened to a capture we are unsure about.
+
+        The authorisation id is embedded in the idempotency key we minted
+        (``capture:<batch_id>:<charge_id>``); Worldflow indexes the key directly, so
+        the path segment is the key itself.
+        """
+        try:
             response = await self._http.get(
                 f"/v2/authorizations/{idempotency_key}/captures/{idempotency_key}"
             )

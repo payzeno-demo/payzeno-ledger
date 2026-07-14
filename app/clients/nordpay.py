@@ -33,6 +33,16 @@ class NordpayClient(ProcessorClient):
             api_key=settings.nordpay_api_key,
             acquirer=ACQUIRER,
             acquirer_account=settings.nordpay_acquirer_account,
+            # Nordpay's settlement file endpoint is slow on month-end; the read timeout
+            # is deliberately wider than Worldflow's.
+            read_timeout_seconds=20.0,
+        )
+
+    async def confirm_settlement(
+        self, acquirer: str, acquirer_reference: str, batch_id: str
+    ) -> None:
+        await self._http.post(
+            f"/v2/settlement-files/{batch_id}/confirm",
             json={
                 "acquirer_reference": acquirer_reference,
                 "confirmed_by": "payzeno-ledger",
@@ -61,6 +71,7 @@ class NordpayClient(ProcessorClient):
         body = response.json()
         return CaptureResponse(
             captured=bool(body.get("captured", True)),
+            reference=str(body.get("reference") or idempotency_key),
             captured_at=_parse_timestamp(body.get("captured_at")),
         )
 
