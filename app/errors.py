@@ -271,6 +271,19 @@ class BatchNotReconcilableError(SettlementError):
     ``RECONCILABLE_BATCH_STATUSES``; an ``open`` batch is still receiving lines.
     """
 
+    code: ClassVar[str] = "batch_not_reconcilable"
+
+
+class SettlementLockedError(SettlementError):
+    """Someone else holds the batch advisory lock.
+
+    409, and since PAY-2043 it is the **normal** outcome of a retry losing a race to a
+    running sweep: ``RetryScheduler.retry_item`` returns ``None`` and the route maps that
+    onto this. Its rate is a signal to watch, not an error budget to burn — the console
+    treats it as "already settling", refetches, and shows no toast.
+    """
+
+    code: ClassVar[str] = "settlement_locked"
     http_status: ClassVar[int] = 409
 
 
@@ -384,6 +397,19 @@ class ProcessorUnavailableError(UpstreamError):
     When the circuit is open this is raised with **no HTTP call made at all** — see
     ``app/clients/breaker.py``. The ``code`` keyword carries the acquirer's own reason so
     ``RETRYABLE_ERROR_CODES`` can be consulted downstream.
+    """
+
+    code: ClassVar[str] = "processor_unavailable"
+
+
+class ProcessorIndeterminateError(UpstreamError):
+    """A read timeout or a connection reset. We do not know what happened.
+
+    Same status and code as :class:`ProcessorUnavailableError` on the wire — the caller
+    cannot do anything different — but a *different Python type*, because internally the
+    difference is everything: an indeterminate capture may already have charged the
+    cardholder, so it routes to ``ProcessorClient.get_capture_status`` instead of being
+    re-issued. That split is PAY-2060 and ``INDETERMINATE_ERROR_CODES``.
     """
 
     code: ClassVar[str] = "internal_error"

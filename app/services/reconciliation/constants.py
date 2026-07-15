@@ -12,6 +12,14 @@ IN_FLIGHT_STATUSES: Final[frozenset[str]] = frozenset({"settling"})
 
 MAX_ATTEMPTS: Final[int] = 6          # default for Settings.reconcile_max_attempts
 
+RETRYABLE_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "processor_unavailable",
+        "rate_limited",
+        "temporary_failure",
+    }
+)
+
 # A timeout on a capture is the one state where we do NOT know whether the cardholder was
 # charged. These never go down the retry path; they go to ProcessorClient.get_capture_status
 # and the outcome decides. PAY-2060.
