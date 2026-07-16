@@ -67,6 +67,25 @@ class InMemoryCircuitBreaker(CircuitBreaker):
         self._record(name, True)
         return result
 
+    def _record(self, name: str, ok: bool) -> None:
+        bucket = self._outcomes.setdefault(name, deque(maxlen=self._window))
+        bucket.append(ok)
+        if len(bucket) < self._window:
+            return
+        failures = sum(1 for entry in bucket if not entry)
+        if failures * 100 // len(bucket) >= self._threshold_pct:
+            self._opened_at[name] = time.monotonic()
+            logger.warning("circuit_opened", circuit=name, failure_count=failures)
+
+
+class RedisCircuitBreaker(CircuitBreaker):
+    """Shared breaker state so all four ledger tasks agree the acquirer is down.
+
+    State is two keys per circuit: a rolling list of outcomes and an ``open`` marker
+    with a TTL equal to the reset window. Reads are cached in-process for 250ms so a
+    200-item drain pass does not issue 200 round trips to Redis.
+    """
+
     def __init__(
         self,
         redis: aioredis.Redis,
@@ -82,10 +101,71 @@ class InMemoryCircuitBreaker(CircuitBreaker):
         self._open_cache: dict[str, tuple[float, bool]] = {}
         self._lock = asyncio.Lock()
 
+    def is_open(self, name: str) -> bool:
+        cached = self._open_cache.get(name)
+        if cached is None:
+            return False
+        cached_at, value = cached
+        if time.monotonic() - cached_at > 0.25:
+            return False
+        return value
+
+    async def call(self, name: str, fn: Callable[[], Awaitable[T]]) -> T:
+        if await self._is_open_remote(name):
+            raise ProcessorUnavailableError(
+                f"circuit open for {name}",
+                code="processor_unavailable",
+                circuit=name,
+            )
+        try:
+            result = await fn()
+        except UpstreamError:
+            await self._record(name, ok=False)
+            raise
+        await self._record(name, ok=True)
+        return result
+
+    async def _is_open_remote(self, name: str) -> bool:
+        value = await self._redis.get(self._open_key(name))
+        is_open = value is not None
+        self._open_cache[name] = (time.monotonic(), is_open)
+        return is_open
+
+    async def _record(self, name: str, *, ok: bool) -> None:
+        key = self._outcome_key(name)
+        async with self._lock:
+            pipe = self._redis.pipeline()
+            pipe.lpush(key, "1" if ok else "0")
+            pipe.ltrim(key, 0, self._window - 1)
+            pipe.lrange(key, 0, self._window - 1)
+            _, _, outcomes = await pipe.execute()
+        if len(outcomes) < self._window:
+            return
+        failures = sum(1 for entry in outcomes if entry in (b"0", "0"))
+        if failures * 100 // len(outcomes) >= self._threshold_pct:
+            await self._redis.set(self._open_key(name), "1", ex=self._reset_seconds)
+            self._open_cache[name] = (time.monotonic(), True)
+            logger.warning("circuit_opened", circuit=name, failure_count=failures)
+
+    @staticmethod
     def _open_key(name: str) -> str:
         return f"payzeno:ledger:breaker:{name}:open"
 
     @staticmethod
+    def _outcome_key(name: str) -> str:
+        return f"payzeno:ledger:breaker:{name}:outcomes"
+
+
+class BreakerProcessorClient(ProcessorClient):
+    """`ProcessorClient` facade over the two acquirer clients plus the sandbox.
+
+    Routing is by the ``acquirer`` value carried on the settlement line, so a batch
+    imported from Nordpay never confirms against Worldflow. ``capture_deferred`` has no
+    acquirer argument — the charge projection's acquirer is not on the call signature —
+    so it uses the configured default acquirer for the charge's own client, which
+    ``SettlementPoster`` selects by passing the item's acquirer through the reference.
+    """
+
     def __init__(
         self,
         *,
@@ -121,6 +201,29 @@ class InMemoryCircuitBreaker(CircuitBreaker):
             ),
         )
 
+    async def capture_deferred(
+        self,
+        charge_id: str,
+        amount_minor: int,
+        currency: str,
+        reference: str,
+        *,
+        idempotency_key: str,
+        acquirer: str | None = None,
+    ) -> CaptureResponse:
+        client = self._client_for(acquirer)
+        name = f"{acquirer or self._default_acquirer}:capture_deferred"
+        return await self._breaker.call(
+            name,
+            lambda: client.capture_deferred(
+                charge_id=charge_id,
+                amount_minor=amount_minor,
+                currency=currency,
+                reference=reference,
+                idempotency_key=idempotency_key,
+            ),
+        )
+
     async def get_capture_status(self, acquirer: str, idempotency_key: str) -> CaptureStatus:
         client = self._client_for(acquirer)
         return await self._breaker.call(
@@ -130,3 +233,27 @@ class InMemoryCircuitBreaker(CircuitBreaker):
             ),
         )
 
+    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+        client = self._client_for(acquirer)
+        return await self._breaker.call(
+            f"{acquirer}:fetch_settlement_file",
+            lambda: client.fetch_settlement_file(
+                acquirer=acquirer, processing_date=processing_date
+            ),
+        )
+
+
+def build_breaker(settings: Settings, redis: aioredis.Redis | None) -> CircuitBreaker:
+    """Pick the breaker implementation. Redis in production, in-memory in compose."""
+    if redis is None:
+        return InMemoryCircuitBreaker(
+            threshold_pct=settings.worldflow_breaker_threshold_pct,
+            window=settings.worldflow_breaker_window,
+            reset_seconds=settings.worldflow_breaker_reset_seconds,
+        )
+    return RedisCircuitBreaker(
+        redis,
+        threshold_pct=settings.worldflow_breaker_threshold_pct,
+        window=settings.worldflow_breaker_window,
+        reset_seconds=settings.worldflow_breaker_reset_seconds,
+    )

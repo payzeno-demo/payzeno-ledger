@@ -84,6 +84,7 @@ class StubPoster(SettlementPoster):
 
 
 class Settings:
+    reconcile_max_attempts = MAX_ATTEMPTS
     reconcile_retry_backoff_base_seconds = 30
     retry_drain_batch_size = 50
 
@@ -118,6 +119,9 @@ def build(
 async def test_claim_item_takes_the_batch_lock_before_the_row_lock(
     sessions_factory, items, seeded_item
 ) -> None:
+    poster = StubPoster()
+    scheduler, _, locks = build(sessions_factory, items, poster)
+
     claimed = await scheduler._claim_item(sessions_factory.session, seeded_item.id)
 
     assert claimed is not None
@@ -182,6 +186,19 @@ async def test_retry_item_settles_and_returns_the_item(sessions_factory, items, 
 
 
 async def test_retry_item_passes_its_own_caller_tag(sessions_factory, items, seeded_item) -> None:
+    # `caller` is a per-call argument because ONE poster instance serves both paths. It is
+    # what populates SettlementDuplicateDetectedPayload.detected_by.
+    poster = StubPoster()
+    scheduler, _, _ = build(sessions_factory, items, poster)
+
+    await scheduler.retry_item(seeded_item.id)
+
+    assert poster.calls[0][1] == "retry_scheduler"
+
+
+async def test_retry_item_returns_none_when_the_claim_fails(
+    sessions_factory, items, seeded_item
+) -> None:
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster, locks=FakeLocks(grant=False))
 
