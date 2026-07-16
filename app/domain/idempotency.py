@@ -52,6 +52,39 @@ _KEY_SHAPES: Final[dict[str, tuple[str, str | None]]] = {
 _ACQUIRER_CAPTURE_SHAPE: Final[tuple[str, str]] = ("sb", "ch")
 
 
+def ledger_key(purpose: str, scope_id: str, subject_id: str = "") -> str:
+    """Build the deterministic transaction idempotency key.
+
+    Validates the id prefixes against :data:`_KEY_SHAPES` so a raw acquirer reference can
+    never land in a ULID slot. ``fee`` is the one purpose whose scope is a free-form fee
+    type rather than an id, because non-transactional fees have no owning entity.
+    """
+    if purpose == "fee":
+        if not scope_id or ":" in scope_id:
+            raise ValidationError(
+                "fee keys need a <fee_type> scope", details={"scope_id": scope_id}
+            )
+        return f"fee:{scope_id}:{subject_id}"
+
+    shape = _KEY_SHAPES.get(purpose)
+    if shape is None:
+        raise ValidationError("unknown ledger purpose", details={"purpose": purpose})
+
+    scope_prefix, subject_prefix = shape
+    ids.require(scope_id, scope_prefix)
+
+    if subject_prefix is None:
+        if subject_id:
+            raise ValidationError(
+                "this purpose takes no subject id",
+                details={"purpose": purpose, "subject_id": subject_id},
+            )
+        return f"{purpose}:{scope_id}:"
+
+    ids.require(subject_id, subject_prefix)
+    return f"{purpose}:{scope_id}:{subject_id}"
+
+
 def acquirer_capture_key(batch_id: str, charge_id: str) -> str:
     """The idempotency key sent to the acquirer on ``capture_deferred``.
 
@@ -85,6 +118,11 @@ def canonical_json(payload: Any) -> str:
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
+
+
+def sha256_of(payload: Any) -> str:
+    """``sha256`` over :func:`canonical_json`, lowercase hex, 64 chars."""
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def fingerprint_of(item: Any) -> str:
