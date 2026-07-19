@@ -72,3 +72,9 @@ class ReconciliationSweepJob(PeriodicJob):
                 continue
             processed += run.items_settled
 
+        logger.info(
+            "reconciliation_sweep_pass",
+            batches=len(batch_ids),
+            items_settled=processed,
+        )
+        return self._result(started, processed)

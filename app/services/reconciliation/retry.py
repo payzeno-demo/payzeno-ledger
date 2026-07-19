@@ -137,3 +137,14 @@ class RetryScheduler:
             item = await self._items.get_or_raise(session, item_id)
             item.attempt_count += 1
             item.last_attempt_at = self._clock.now()
+            item.last_error_code = code
+            item.status = "failed"
+        metrics.increment("SettlementItemRetried", outcome="failed", error_code=code)
+
+    async def _claim_item(
+        self, session: AsyncSession, item_id: str
+    ) -> ReconciliationItem | None:
+        """Claim one item for this transaction, or return ``None``.
+
+        Batch advisory lock first, row lock second. That ordering is the fix (PAY-2043)
+        and it is unconditional since PAY-2056 removed the ``reconcile_batch_lock_on_retry``

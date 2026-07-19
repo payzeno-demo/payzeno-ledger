@@ -246,3 +246,14 @@ class ReconciliationService:
                         "completed_at": self._clock.now().isoformat(),
                     },
                     merchant_id=None,
+                    correlation_id=run.id,
+                    session=session,
+                    livemode=batch.livemode,
+                )
+
+
+def _chunk(values: list[str], size: int) -> list[list[str]]:
+    """Always at least one chunk, so ``chunk_count`` is never zero."""
+    if not values:
+        return [[]]
+    return [values[offset : offset + size] for offset in range(0, len(values), size)]
