@@ -187,6 +187,9 @@ async def test_sweep_skips_settled_items(sessions_factory, batches, items, runs)
     just not a concurrency test, and it was read as one for three months.
     """
     batches.seed(make_batch(batch_id="sb_skip", status="closed"))
+    already = items.seed(
+        make_item(item_id="ri_skip", batch_id="sb_skip", status="settled", next_attempt_at=NOW)
+    )
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
@@ -275,6 +278,7 @@ async def test_run_counters_are_locals_not_orm_mutations(
     poster = ScriptedPoster()
     service, _, _ = build(sessions_factory, batches, items, runs, poster)
 
+    run = await service.reconcile_batch(batch_of_three)
     stored = runs.rows[run.id]
 
     assert stored.items_total == 3

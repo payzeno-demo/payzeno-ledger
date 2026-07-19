@@ -55,3 +55,10 @@ class RetryDrainJob(PeriodicJob):
         return self._settings.retry_drain_interval_seconds
 
     async def run_once(self) -> JobResult:
+        """One drain pass, capped at ``RETRY_DRAIN_BATCH_SIZE`` items.
+
+        The job is registered in every task regardless of ``RETRY_DRAIN_ENABLED`` — the
+        flag is checked *here*, per tick, so flipping it takes effect on the next minute
+        instead of on the next deploy. That is the whole reason it is a setting and not a
+        registration-time decision.
+
