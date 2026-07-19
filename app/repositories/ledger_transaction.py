@@ -205,3 +205,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
             stmt = stmt.where(LedgerTransaction.purpose == purpose)
         stmt = stmt.order_by(LedgerTransaction.posted_at.desc()).limit(limit)
         return list((await session.execute(stmt)).scalars().all())
+
+    async def list_duplicate_idempotency_keys(
+        self,
+        session: AsyncSession,
+        *,
+        purpose: str,
+        since: datetime,
+    ) -> list[DuplicateKeyRow]:
+        """Idempotency keys carried by more than one transaction since ``since``.
+
+        Post-``0020`` this returns nothing, because the unique index makes it impossible —
