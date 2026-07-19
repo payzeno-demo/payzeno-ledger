@@ -133,6 +133,7 @@ class LedgerPoster:
             key=idempotency_key,
             purpose=purpose,
             merchant_id=merchant_id,
+            currency=currency,
             reference_type=reference_type,
             reference_id=reference_id,
             created_by=created_by,
@@ -158,9 +159,16 @@ class LedgerPoster:
         entries = await self._materialise_entries(
             session,
             transaction=transaction,
+            lines=lines,
             merchant_id=merchant_id,
             currency=currency,
             livemode=livemode,
+        )
+        await self._entries.add_all(session, entries)
+        await self._apply_balance_delta(
+            session,
+            livemode=livemode,
+            entries=entries,
             transaction_id=transaction.id,
         )
 
@@ -247,6 +255,22 @@ class LedgerPoster:
             created_by=created_by,
             transaction_id=result.transaction.id,
             reverses=original.id,
+            reason=reason,
+        )
+        return result
+
+    async def _materialise_entries(
+        self,
+        session: AsyncSession,
+        *,
+        transaction: LedgerTransaction,
+        lines: list[PostingLine],
+        merchant_id: str | None,
+        currency: str,
+        livemode: bool,
+    ) -> list[LedgerEntry]:
+        entries: list[LedgerEntry] = []
+        for sequence, line in enumerate(lines, start=1):
             account = await self._resolver.get_or_create(
                 session,
                 merchant_id=None if _is_platform_account(line.account_type) else merchant_id,
@@ -297,6 +321,7 @@ class LedgerPoster:
         await self._balances.apply_delta(
             session,
             currency=currency,
+            livemode=livemode,
             available_delta=available,
             pending_delta=pending,
             reserved_delta=reserved,
@@ -338,6 +363,21 @@ class LedgerPoster:
                     expected=currency,
                     actual=line_currency,
                 )
+            line_livemode = getattr(line, "livemode", livemode)
+            if line_livemode != livemode:
+                raise LivemodeMismatchError(
+                    "posting line livemode differs from the transaction livemode",
+                    expected=livemode,
+                    actual=line_livemode,
+                )
+
+
+def _signed_total(entries: list[LedgerEntry], account_types: frozenset[str]) -> int:
+    """Credits increase what Payzeno owes the merchant; debits decrease it."""
+    total = 0
+    for entry in entries:
+        if entry.account_type not in account_types:
+            continue
         total += entry.amount_minor if entry.direction == "credit" else -entry.amount_minor
     return total
 

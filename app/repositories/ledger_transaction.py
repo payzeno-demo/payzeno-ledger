@@ -194,3 +194,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         purpose: str | None = None,
         limit: int = 100,
     ) -> list[LedgerTransaction]:
+        """One merchant's transactions, newest posted first.
+
+        Uses ``ix_ledger_transaction_merchant_posted``. The optional ``purpose`` filter
+        narrows to a single posting kind — the console's payout detail page asks for
+        ``payout`` and ``payout_reversal`` separately rather than filtering client-side.
+        """
+        stmt = select(LedgerTransaction).where(LedgerTransaction.merchant_id == merchant_id)
+        if purpose is not None:
+            stmt = stmt.where(LedgerTransaction.purpose == purpose)
+        stmt = stmt.order_by(LedgerTransaction.posted_at.desc()).limit(limit)
+        return list((await session.execute(stmt)).scalars().all())
