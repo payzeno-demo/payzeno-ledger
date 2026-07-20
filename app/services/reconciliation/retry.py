@@ -148,3 +148,13 @@ class RetryScheduler:
 
         Batch advisory lock first, row lock second. That ordering is the fix (PAY-2043)
         and it is unconditional since PAY-2056 removed the ``reconcile_batch_lock_on_retry``
+        kill switch a week after the incident.
+
+        Why it is sufficient: ``reconcile_batch`` holds the same
+        ``pg_advisory_xact_lock(PAY, hash(batch_id))`` in a guard transaction that outlives
+        every per-item transaction. A retry either wins the key and runs entirely, or fails
+        to acquire and returns ``None``, leaving the item ``retryable`` for the next drain —
+        by which time the sweep has committed ``settled`` and the ``status IN
+        RETRYABLE_STATUSES`` predicate below excludes it. It depends on ``READ COMMITTED``:
+        nothing in this service sets ``isolation_level``, and under ``REPEATABLE READ`` the
+        snapshot would be taken at this very ``SELECT``, the re-read would still see

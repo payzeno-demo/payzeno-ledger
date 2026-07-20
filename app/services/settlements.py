@@ -124,6 +124,11 @@ class SettlementService:
             },
             merchant_id=None,
             correlation_id=batch.id,
+            session=session,
+            livemode=batch.livemode,
+        )
+        logger.info(
+            "settlement_batch_closed",
             batch_id=batch.id,
             item_count=batch.item_count,
             expected_total_minor=batch.expected_total_minor,
