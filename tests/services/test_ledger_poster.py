@@ -83,10 +83,55 @@ class InMemoryTransactions(LedgerTransactionRepository):
         if key in self.by_key:
             return IdempotencyClaim(transaction_id=self.by_key[key].id, created=False)
         self._seq += 1
+        row = type("Txn", (), {"id": f"txn_{self._seq:04d}", **kw})()
+        self.by_key[key] = row
+        return IdempotencyClaim(transaction_id=row.id, created=True)
+
+    async def get_or_raise(self, session: Any, entity_id: str) -> Any:
+        for row in self.by_key.values():
+            if row.id == entity_id:
+                return row
+        raise KeyError(entity_id)
+
+
+class InMemoryEntries(LedgerEntryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[Any] = []
+
+    async def add_all(self, session: Any, entries: list[Any]) -> list[Any]:
+        self.rows.extend(entries)
+        return entries
+
+
+class InMemoryBalanceCache(MerchantBalanceCacheRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.deltas: list[dict[str, Any]] = []
+
+    async def apply_delta(self, session: Any, **kw: Any) -> None:
+        self.deltas.append(kw)
+
+
+def line(account_type: str, direction: str, amount_minor: int) -> PostingLine:
+    return PostingLine(
         account_type=account_type,  # type: ignore[arg-type]
         direction=direction,  # type: ignore[arg-type]
+        amount_minor=amount_minor,
+    )
+
+
+BALANCED = [line("processor_clearing", "debit", 10_000), line("merchant_payable", "credit", 10_000)]
+
+
+def build(*, frozen: set[str] | None = None):
+    transactions = InMemoryTransactions()
+    entries = InMemoryEntries()
+    cache = InMemoryBalanceCache()
+    poster = LedgerPoster(
         transactions=transactions,
         entries=entries,
+        accounts=InMemoryAccounts(),
         balances=cache,
         resolver=StubResolver(frozen=frozen),
         publisher=CollectingPublisher(),
@@ -260,10 +305,12 @@ async def test_publishes_transaction_posted() -> None:
     transactions = InMemoryTransactions()
     publisher = CollectingPublisher()
     poster = LedgerPoster(
+        transactions=transactions,
         entries=InMemoryEntries(),
         accounts=InMemoryAccounts(),
         balances=InMemoryBalanceCache(),
         resolver=StubResolver(),
+        publisher=publisher,
         clock=FrozenClock(),
     )
 
