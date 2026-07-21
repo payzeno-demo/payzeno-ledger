@@ -97,5 +97,9 @@ class SameDayAchPayoutInitiator(AchPayoutInitiator):
             "same_day_ach_payout_initiated",
             payout_id=payout.id,
             rail_reference=rail_reference,
+            arrival_estimate=arrival.isoformat(),
+        )
+        return InitiationResult(
             rail_reference=rail_reference,
+            submitted_at=submitted_at,
         )
