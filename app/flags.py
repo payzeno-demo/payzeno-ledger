@@ -106,6 +106,9 @@ class StaticFeatureFlags(FeatureFlags):
     the same fail-closed behaviour production has.
     """
 
+    def __init__(self, values: Mapping[str, bool] | None = None) -> None:
+        self._values = dict(values or {})
+
     def enabled(self, flag: str, *, merchant_id: str | None = None) -> bool:
         """True when ``flag`` was explicitly set to a truthy value."""
         return bool(self._values.get(flag, False))
