@@ -113,6 +113,11 @@ def parse_key(key: str) -> tuple[str, str, str]:
     return purpose, scope_id, subject_id
 
 
+def is_item_scoped(purpose: str) -> bool:
+    """True for purposes whose subject is a ``reconciliation_item``."""
+    return purpose in _ITEM_SCOPED
+
+
 def canonical_json(payload: Any) -> str:
     """Deterministic JSON for hashing: sorted keys, no whitespace, no NaN."""
     return json.dumps(
