@@ -234,6 +234,7 @@ async def cmd_locks(sessions: SingleConnectionSessionFactory) -> int:
 async def cmd_stale_open_batches(
     sessions: SingleConnectionSessionFactory, older_than_hours: int = 6
 ) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).date()
     batches = SettlementBatchRepository()
     async with sessions.begin() as session:
         open_batches = await batches.list_by_status(session, ("open",))
