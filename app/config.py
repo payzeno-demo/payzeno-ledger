@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     nordpay_acquirer_account: str = "payzeno-uk-1"
     nordpay_breaker_threshold_pct: int = 50
     nordpay_breaker_window: int = 100
+    # -- reconciliation ------------------------------------------------------------
+    reconcile_sweep_interval_seconds: int = 900
     #: Wall-clock budget for one sweep pass, added by PR #171. The guard transaction is
     #: committed and reopened at this cadence so the batch advisory lock is never held
     #: for more than half a minute; a pass that runs over finishes on the next tick.
@@ -134,6 +136,14 @@ class Settings(BaseSettings):
 
     @field_validator("log_level", mode="before")
     @classmethod
+    def _upper(cls, value: object) -> object:
+        """Accept ``info`` as well as ``INFO``.
+
+        The ECS task definition and the compose file disagree about case and have since
+        month two. Normalising here is cheaper than making them agree.
+        """
+        return value.upper() if isinstance(value, str) else value
+
     @field_validator("aws_endpoint_url", "otel_exporter_otlp_endpoint", mode="before")
     @classmethod
     def _blank_is_none(cls, value: object) -> object:
