@@ -216,3 +216,13 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         """Idempotency keys carried by more than one transaction since ``since``.
 
         Post-``0020`` this returns nothing, because the unique index makes it impossible —
+        which is the point of running it nightly. It is the detection half of PAY-2054;
+        the audit job publishes ``ledger.imbalance_detected`` on any row it returns.
+
+        The window keeps the ``GROUP BY`` off the whole table. Twenty-four hours by
+        default, which is longer than the longest sweep plus the longest backoff.
+        """
+        grouped = (
+            select(
+                LedgerTransaction.idempotency_key.label("idempotency_key"),
+                func.count().label("row_count"),

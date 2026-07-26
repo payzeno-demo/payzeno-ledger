@@ -43,7 +43,15 @@ class LedgerTransaction(Base, CreatedAtMixin, LivemodeMixin):
     #: clock or a random value. `app/domain/idempotency.py::ledger_key` builds it.
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
 
+    #: sha256 over the canonicalised request minus the idempotency key. Added by 0020;
+    #: `claim_idempotency_key` compares it, which is what makes
+    #: "200 on an identical body, 409 duplicate_settlement on a divergent one"
+    #: implementable at all. Orthogonal to the INC defect: even post-0020 the unique
+    #: index detects key REUSE, not body divergence.
+    request_fingerprint: Mapped[str] = mapped_column(Sha256Hex, nullable=False)
+
     purpose: Mapped[str] = mapped_column(ledger_purpose_enum, nullable=False)
+    merchant_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
 
     #: Polymorphic pointer at the API-side object this posting is about.
