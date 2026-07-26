@@ -83,6 +83,7 @@ class BacklogService:
 
         logger.info(
             "reconciliation_backlog_read",
+            batches=len(buckets),
             items=total_items,
             running = await self._runs.list_running_batch_ids(session, batch_ids)
         return set(running)
