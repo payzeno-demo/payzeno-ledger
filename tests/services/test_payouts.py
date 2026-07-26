@@ -59,6 +59,11 @@ class RecordingLocks(AdvisoryLockManager):
 class StubEntries:
     """`sum_by_account_and_purpose` — the arc PERF query behind the calculator."""
 
+    def __init__(self, *, credits: int = 0, debits: int = 0) -> None:
+        self.credits = credits
+        self.debits = debits
+        self.calls: list[dict[str, Any]] = []
+
     async def sum_by_account_and_purpose(
         self,
         session: Any,
@@ -107,8 +112,17 @@ class StubBanks:
     def __init__(self, bank: Any) -> None:
         self.bank = bank
 
+    async def get_default(self, session: Any, *, merchant_id: str, currency: str) -> Any:
+        return self.bank
+
+
+class StubCalendar:
     def __init__(self) -> None:
         self.calls: list[tuple[date, str, str]] = []
+
+    def next_business_day(self, day: date, currency: str, rail: str) -> date:
+        self.calls.append((day, currency, rail))
+        return date(2026, 4, 20)
 
     method = "ach"
 
@@ -116,6 +130,22 @@ class StubBanks:
         self.calls: list[str] = []
         self.raises = raises
 
+    async def initiate(self, session: Any, payout: Any, bank: Any) -> Any:
+        if self.raises is not None:
+            raise self.raises
+        self.calls.append(payout.id)
+        return type(
+            "InitiationResult",
+            (),
+            {
+                "rail_reference": f"ACH-{payout.id}",
+                "arrival_estimate": date(2026, 4, 20),
+                "submitted_at": NOW,
+            },
+        )()
+
+
+class StubLedger:
     async def post(self, session: Any, **kwargs: Any) -> Any:
         self._seq += 1
         self.posts.append(kwargs)
@@ -160,6 +190,7 @@ def _service(
     calculator = PayoutCalculator(
         entries=entries, payouts=payouts, merchants=merchants
     )
+    locks = RecordingLocks()
     publisher = CollectingPublisher()
     service = PayoutService(
         locks=locks,
@@ -196,6 +227,16 @@ async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
     Without this the second `create_payout` sees the same balance the first one did.
     """
     _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=4_180)
+
+    entries = calculator._entries  # noqa: SLF001 - asserting the query shape on purpose
+
+    await calculator.compute_available(object(), "mer_payout", "USD", NOW)
+
+    assert {call["account_type"] for call in entries.calls} == {"merchant_payable"}
+
+
+async def test_compute_available_detail_reports_its_own_arithmetic() -> None:
+    _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=1_000)
 
     payout = await service.create_payout(
         object(),
@@ -278,6 +319,8 @@ async def test_mark_failed_reverses_the_payout_posting(_seeded_payout) -> None:
     has permanently lost the amount and there is no state left to correct it from.
     """
     service, payouts, payout_id = _seeded_payout
+    ledger = service._ledger  # noqa: SLF001
+
     payout = await service.mark_failed(
         object(),
         payout_id,
@@ -292,6 +335,18 @@ async def test_mark_failed_reverses_the_payout_posting(_seeded_payout) -> None:
 async def test_mark_failed_emits_payout_failed(_seeded_payout) -> None:
     """The console learns about this over the WebSocket relay, so it has to be published."""
     service, payouts, payout_id = _seeded_payout
+    publisher = service._publisher  # noqa: SLF001
+
+    await service.mark_failed(
+        object(), payout_id, failure_code="bank_rejected", failure_message="rejected"
+    )
+
+    assert "payout.failed" in publisher.event_types()
+
+
+@pytest.fixture
+async def _seeded_payout():
+    service, _, _, _, _, payouts = _service()
     payout = await service.create_payout(
         object(),
         merchant_id="mer_payout",
