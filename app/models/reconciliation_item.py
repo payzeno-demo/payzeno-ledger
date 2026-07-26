@@ -74,6 +74,9 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     gross_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     #: What the acquirer kept = interchange + scheme + acquirer markup. An expense.
     fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    interchange_minor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
     scheme_fee_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     net_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
@@ -89,6 +92,9 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     )
     matched_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    status: Mapped[str] = mapped_column(
+        reconciliation_item_status_enum, nullable=False, server_default="pending"
+    )
     last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_attempt_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -139,6 +145,10 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     def is_terminal(self) -> bool:
         """Whether nothing will move this item without an operator."""
         return self.status in {"settled", "failed", "orphaned"}
+
+    def needs_human(self) -> bool:
+        """Statuses ``GET /internal/v1/reconciliation/backlog`` surfaces to ops."""
+        return self.status in {"orphaned", "needs_review", "variance_exceeded", "failed"}
 
     def compute_variance_minor(self) -> int:
         """Signed difference between what the acquirer settled and what we authorised.
