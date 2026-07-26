@@ -61,6 +61,28 @@ class BacklogService:
                 batch_id=batch_id,
             )
 
+            buckets: list[BacklogBucket] = []
+            for row in rows:
+                buckets.append(
+                    BacklogBucket(
+                        batch_id=row.batch_id,
+                        currency=row.currency,
+                        status=row.status,
+                        item_count=row.item_count,
+                        oldest_next_attempt_at=row.oldest_next_attempt_at,
+                        gross_minor=row.gross_minor or 0,
+                    )
+                )
+
+        now = self._clock.now()
+        stale = sum(1 for bucket in buckets if _is_stale(bucket.oldest_next_attempt_at, now))
+        total_items = sum(bucket.item_count for bucket in buckets)
+        total_gross = sum(bucket.gross_minor for bucket in buckets)
+
+        buckets.sort(key=lambda bucket: (-bucket.item_count, bucket.batch_id))
+
+        logger.info(
+            "reconciliation_backlog_read",
             items=total_items,
             running = await self._runs.list_running_batch_ids(session, batch_ids)
         return set(running)

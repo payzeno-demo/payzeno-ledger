@@ -158,3 +158,14 @@ class RetryScheduler:
         RETRYABLE_STATUSES`` predicate below excludes it. It depends on ``READ COMMITTED``:
         nothing in this service sets ``isolation_level``, and under ``REPEATABLE READ`` the
         snapshot would be taken at this very ``SELECT``, the re-read would still see
+        ``retryable``, and the fix would look correct and not work.
+        """
+        batch_id = await self._items.get_batch_id(session, item_id)
+        if batch_id is None:
+            return None
+
+        # NON-BLOCKING on purpose. A sweep can hold the batch lock for minutes across
+        # 5,000 items; pg_advisory_xact_lock would park this drain worker on a pooled
+        # connection for the whole pass, and 200 of those exhausts DATABASE_POOL_SIZE.
+        # Failing fast leaves the item retryable for the next drain, which is exactly what
+        # we want — the sweep is settling it anyway. The cost is the convoy mregression
