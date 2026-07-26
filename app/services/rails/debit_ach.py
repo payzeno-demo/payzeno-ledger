@@ -99,12 +99,26 @@ class AchPayoutPuller:
         posted = await self._ledger.post(
             session,
             idempotency_key=ledger_key("debitpull", merchant_id, rail_reference),
+            purpose="adjustment",
             merchant_id=merchant_id,
             currency=currency,
+            livemode=True,
             reference_type="merchant",
             reference_id=merchant_id,
+            lines=[
+                PostingLine(account_type="cash", direction="debit", amount_minor=capped),
+                PostingLine(
+                    account_type="merchant_payable", direction="credit", amount_minor=capped
+                ),
+            ],
             created_by="system",
+            request_fingerprint=ledger_key("debitpullfp", merchant_id, reason),
+        )
+
+        logger.info(
+            "debit_pull_initiated",
             merchant_id=merchant_id,
+            rail_reference=rail_reference,
             amount_minor=capped,
             reason=reason,
             transaction_id=posted.transaction.id,
@@ -113,6 +127,7 @@ class AchPayoutPuller:
             rail_reference=rail_reference,
             amount_minor=capped,
             effective_date=effective,
+            submitted_at=submitted_at,
             transaction_id=posted.transaction.id,
         )
 
