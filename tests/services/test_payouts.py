@@ -47,6 +47,11 @@ class RecordingLocks(AdvisoryLockManager):
         self.merchant_currency: list[str] = []
         self.item_locks: list[str] = []
 
+    async def acquire_merchant_currency_lock(
+        self, session: Any, merchant_id: str, currency: str
+    ) -> None:
+        self.merchant_currency.append(f"{merchant_id}:{currency}")
+
     async def acquire_item_lock(self, session: Any, item_id: str) -> None:
         self.item_locks.append(item_id)
 
@@ -71,6 +76,11 @@ class StubEntries:
 
 
 class StubPayouts:
+    def __init__(self, *, in_flight: int = 0, rows: dict[str, Any] | None = None) -> None:
+        self.in_flight = in_flight
+        self.rows: dict[str, Any] = rows or {}
+        self.added: list[Any] = []
+
     async def sum_in_flight(
         self, session: Any, *, merchant_id: str, currency: str
     ) -> int:
@@ -97,8 +107,40 @@ class StubBanks:
     def __init__(self, bank: Any) -> None:
         self.bank = bank
 
+    def __init__(self) -> None:
+        self.calls: list[tuple[date, str, str]] = []
+
     method = "ach"
 
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.calls: list[str] = []
+        self.raises = raises
+
+    async def post(self, session: Any, **kwargs: Any) -> Any:
+        self._seq += 1
+        self.posts.append(kwargs)
+        transaction = type("Txn", (), {"id": f"txn_po_{self._seq}"})()
+        return type("PostResult", (), {"transaction": transaction, "created": True})()
+
+
+def _bank(status: str = "verified") -> Any:
+    return type(
+        "BankAccountProjection",
+        (),
+        {
+            "id": "ba_1",
+            "merchant_id": "mer_payout",
+            "currency": "USD",
+            "status": status,
+            "account_number_token": "tok_bank_1",
+            "account_last_four": "4242",
+            "country": "US",
+            "is_default": True,
+        },
+    )()
+
+
+def _service(
     *,
     merchant_status: str = "active",
     credits: int = 100_000,
@@ -106,8 +148,15 @@ class StubBanks:
     bank_status: str = "verified",
     initiator: StubInitiator | None = None,
 ):
+    merchant = make_merchant_projection(
+        merchant_id="mer_payout",
+        status=merchant_status,
+        payout_delay_days=2,
+        source_occurred_at=NOW,
+    )
     entries = StubEntries(credits=credits, debits=debits)
     payouts = StubPayouts(in_flight=in_flight)
+    merchants = StubMerchants(merchant)
     calculator = PayoutCalculator(
         entries=entries, payouts=payouts, merchants=merchants
     )
@@ -212,6 +261,22 @@ async def test_create_payout_refuses_an_unverified_bank_account() -> None:
 
 
 async def test_mark_paid_takes_the_item_lock_keyed_on_payout_id(_seeded_payout) -> None:
+    service, payouts, payout_id = _seeded_payout
+    locks = service._locks  # noqa: SLF001
+
+    await service.mark_paid(
+        object(), payout_id, paid_at=NOW, bank_reference="BANK-REF-1"
+    )
+
+    assert locks.item_locks == [payout_id]
+
+
+async def test_mark_failed_reverses_the_payout_posting(_seeded_payout) -> None:
+    """Invariant 7. `failed` is terminal, so without the reversal the money is gone.
+
+    `payout` already debited `merchant_payable`. If nothing credits it back the merchant
+    has permanently lost the amount and there is no state left to correct it from.
+    """
     service, payouts, payout_id = _seeded_payout
     payout = await service.mark_failed(
         object(),

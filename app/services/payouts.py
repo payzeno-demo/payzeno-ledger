@@ -107,6 +107,7 @@ class PayoutCalculator:
         posted = await self._entries.sum_by_account_and_purpose(
             session,
             merchant_id=merchant_id,
+            currency=currency,
             livemode=True,
             as_of=cutoff,
         )
@@ -226,6 +227,7 @@ class PayoutService:
             purpose="payout",
             merchant_id=merchant_id,
             currency=currency,
+            livemode=True,
             reference_type="payout",
             reference_id=payout.id,
             lines=[
@@ -235,6 +237,27 @@ class PayoutService:
                 PostingLine(account_type="cash", direction="credit", amount_minor=requested),
             ],
             created_by="system",
+            request_fingerprint=ledger_key("payoutfp", merchant_id, payout.id),
+        )
+        payout.ledger_transaction_id = posted.transaction.id
+
+        result = await initiator.initiate(session, payout, bank)
+        payout.arrival_estimate = result.arrival_estimate
+        payout.bank_reference = result.rail_reference
+        payout.initiated_at = result.submitted_at
+
+        await self._publisher.publish(
+            "payout.scheduled",
+            {
+                "payout_id": payout.id,
+                "merchant_id": merchant_id,
+                "bank_account_id": bank.bank_account_id,
+                "amount_minor": requested,
+                "currency": currency,
+                "method": method,
+                "available_on": available_on.isoformat(),
+                "scheduled_at": self._clock.now().isoformat(),
+            },
             merchant_id=merchant_id,
             correlation_id=payout.id,
             session=session,
@@ -282,6 +305,7 @@ class PayoutService:
                 "ledger_transaction_id": payout.ledger_transaction_id,
                 "paid_at": paid_at.isoformat(),
             },
+            merchant_id=payout.merchant_id,
             correlation_id=payout.id,
             session=session,
         )
@@ -366,8 +390,25 @@ class PayoutService:
         returned = await self._payouts.mark_returned(
             session,
             payout.id,
+            failure_code=failure_code,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
+            at=self._clock.now(),
+        )
+        await self._publisher.publish(
+            "payout.returned",
+            {
+                "payout_id": returned.id,
+                "merchant_id": returned.merchant_id,
+                "bank_account_id": returned.bank_account_id,
+                "amount_minor": returned.amount_minor,
+                "currency": returned.currency,
+                "failure_code": failure_code,
+                "failure_message": failure_message,
+                "reversal_transaction_id": reversal,
+                "bank_reference": returned.bank_reference,
+                "returned_at": returned.returned_at.isoformat(),
+            },
             merchant_id=returned.merchant_id,
             correlation_id=returned.id,
             session=session,
