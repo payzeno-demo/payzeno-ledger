@@ -226,3 +226,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
             select(
                 LedgerTransaction.idempotency_key.label("idempotency_key"),
                 func.count().label("row_count"),
+                func.min(LedgerTransaction.currency).label("currency"),
+                func.min(LedgerTransaction.id).label("sample_transaction_id"),
+            )
+            .where(LedgerTransaction.purpose == purpose)
+            .where(LedgerTransaction.posted_at >= since)
+            .group_by(LedgerTransaction.idempotency_key)
+            .having(func.count() > 1)
+            .order_by(func.count().desc())
+        )
+        rows = (await session.execute(grouped)).all()
+        return [
