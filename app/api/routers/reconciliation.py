@@ -149,6 +149,16 @@ async def start_run(
         trigger=body.trigger or "manual",
         caller=caller,
     )
+    run = await reconciler.reconcile_batch(
+        body.batch_id,
+        trigger=body.trigger or "manual",
+        max_items=body.max_items or 5000,
+    )
+    return _serialise_run(run)
+
+
+@router.get(
+    "/runs/{run_id}",
     response_model=ReconciliationRun,
     summary="Fetch one reconciliation run",
 )
@@ -228,6 +238,7 @@ async def retry_item(
 )
 async def get_backlog(
     backlog: BacklogDep,
+    currency: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
     batch_id: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     """Drives the ops dashboard tile and the ``LedgerReconciliationBacklog`` alarm.
