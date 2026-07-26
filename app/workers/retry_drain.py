@@ -62,3 +62,9 @@ class RetryDrainJob(PeriodicJob):
         instead of on the next deploy. That is the whole reason it is a setting and not a
         registration-time decision.
 
+        The cap is a wall-clock budget in disguise: each item makes at least one acquirer
+        call, so 200 items at 300ms is a minute, which is exactly the interval. Setting
+        it higher does not drain faster — ``max_instances=1`` on the scheduler means the
+        next tick is skipped while this one is still running — it only makes the pass
+        take longer to notice a shutdown.
+        """
