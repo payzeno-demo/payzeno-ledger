@@ -56,6 +56,10 @@ class PayoutSchedulerJob(PeriodicJob):
         self._clock = clock
         self._settings = settings
 
+    @property
+    def interval_seconds(self) -> int:
+        return INTERVAL_SECONDS
+
     async def run_once(self) -> JobResult:
         """Advance every payout whose ``available_on`` has arrived.
 
