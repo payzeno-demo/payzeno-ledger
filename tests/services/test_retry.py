@@ -159,6 +159,8 @@ async def test_claim_item_ignores_items_outside_retryable_statuses(
     from tests.factories import make_batch
 
     batches.seed(make_batch(batch_id="sb_done", status="reconciled"))
+    settled = items.seed(make_item(item_id="ri_done", batch_id="sb_done", status="settled"))
+
     poster = StubPoster()
     scheduler, _, _ = build(sessions_factory, items, poster)
 
@@ -237,6 +239,11 @@ async def test_failure_persists_attempt_count(sessions_factory, items, seeded_it
     inside it — attempt_count, last_attempt_at, status='settling' — is gone. `_mark_retryable`
     therefore opens its OWN session and writes them again. If it did not, the drain could
     never mark anything retryable and would spin on the same item forever.
+    """
+    poster = StubPoster(
+        raises=RetryableSettlementError(item_id="ri_svc", code="processor_unavailable")
+    )
+    scheduler, _, _ = build(sessions_factory, items, poster)
     before = sessions_factory.begin_count
 
     result = await scheduler.retry_item(seeded_item.id)
@@ -327,6 +334,14 @@ async def test_max_attempts_comes_from_settings_not_the_module_constant(
 
 
 async def test_retry_exhausted_is_the_declared_error_type() -> None:
+    exc = RetryExhaustedError(item_id="ri_1")
+    assert exc.code == "retry_exhausted"
+    assert exc.http_status == 422
+
+
+async def test_an_upstream_error_is_translated_before_it_reaches_us(
+    sessions_factory, items, seeded_item
+) -> None:
     # ProcessorUnavailableError is what the client raises; SettlementPoster translates it to
     # RetryableSettlementError when the code is in RETRYABLE_ERROR_CODES. If an untranslated
     # one leaks through, it is still a PayzenoLedgerError and the item fails rather than
