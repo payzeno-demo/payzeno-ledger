@@ -124,6 +124,11 @@ class StubCalendar:
         self.calls.append((day, currency, rail))
         return date(2026, 4, 20)
 
+    def is_business_day(self, day: date, currency: str, rail: str) -> bool:
+        return day.weekday() < 5
+
+
+class StubInitiator:
     method = "ach"
 
     def __init__(self, *, raises: Exception | None = None) -> None:
@@ -146,6 +151,10 @@ class StubCalendar:
 
 
 class StubLedger:
+    def __init__(self) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self._seq = 0
+
     async def post(self, session: Any, **kwargs: Any) -> Any:
         self._seq += 1
         self.posts.append(kwargs)
@@ -175,6 +184,7 @@ def _service(
     merchant_status: str = "active",
     credits: int = 100_000,
     debits: int = 0,
+    in_flight: int = 0,
     bank_status: str = "verified",
     initiator: StubInitiator | None = None,
 ):
@@ -191,7 +201,9 @@ def _service(
         entries=entries, payouts=payouts, merchants=merchants
     )
     locks = RecordingLocks()
+    ledger = StubLedger()
     publisher = CollectingPublisher()
+    initiators = {"ach": initiator or StubInitiator()}
     service = PayoutService(
         locks=locks,
         payouts=payouts,
@@ -228,6 +240,18 @@ async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
     """
     _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=4_180)
 
+    available = await calculator.compute_available(object(), "mer_payout", "USD", NOW)
+
+    assert available.amount_minor == 0
+
+
+async def test_compute_available_only_looks_at_merchant_payable() -> None:
+    """Reserve is a different account and is not in the formula.
+
+    `capture` credited `reserve`, not `merchant_payable`. Subtracting reserve here would
+    deduct money that was never added.
+    """
+    _, calculator, _, _, _, _ = _service(credits=9_680)
     entries = calculator._entries  # noqa: SLF001 - asserting the query shape on purpose
 
     await calculator.compute_available(object(), "mer_payout", "USD", NOW)
@@ -237,6 +261,32 @@ async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
 
 async def test_compute_available_detail_reports_its_own_arithmetic() -> None:
     _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=1_000)
+
+    detail = await calculator.compute_available_detail(object(), "mer_payout", "USD", NOW)
+
+    assert detail.posted_minor == 9_680 - 5_500
+    assert detail.in_flight_minor == 1_000
+    assert detail.amount.amount_minor == 3_180
+
+
+# --------------------------------------------------------------------------------------
+# PayoutService.create_payout
+# --------------------------------------------------------------------------------------
+
+
+async def test_create_payout_takes_the_merchant_currency_lock_first() -> None:
+    """Advisory then row, everywhere. ADR 0011."""
+    service, _, locks, _, _, _ = _service()
+
+    await service.create_payout(
+        object(), merchant_id="mer_payout", req={"amount_minor": 5_000, "currency": "USD", "method": "ach"}
+    )
+
+    assert locks.merchant_currency == ["mer_payout:USD"]
+
+
+async def test_create_payout_posts_the_ledger_transaction() -> None:
+    service, _, _, ledger, _, _ = _service()
 
     payout = await service.create_payout(
         object(),
