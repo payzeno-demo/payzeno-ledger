@@ -225,6 +225,20 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         *,
         statuses: frozenset[str],
         currency: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[BacklogRow]:
+        """Group the unsettled backlog by batch and status.
+
+        Backs ``GET /internal/v1/reconciliation/backlog``, which is what the ops console
+        polled every thirty seconds while the incident was being drained.
+
+        .. note::
+           TODO(PAY-2057): this returns every batch with retryable items, including ones
+           whose ``reconciliation_run`` is currently ``running``. The backlog service then
+           discovers that lock by lock — it retries an item, loses the batch lock, gets
+           ``None``, and moves on. Filtering here on
+           ``ReconciliationRunRepository.list_running_batch_ids`` would skip them up
+           front. Filed at 02:52 and still open.
         """
         stmt = (
             select(

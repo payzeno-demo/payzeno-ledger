@@ -74,3 +74,10 @@ class RetryDrainJob(PeriodicJob):
             return JobResult(
                 name=self.name, items_processed=0, duration_ms=0, error=None
             )
+
+        limit = self._settings.retry_drain_batch_size
+        settled = await self._scheduler.drain(limit=limit)
+
+        metrics.increment("RetryDrainPass", settled=str(settled > 0).lower())
+        metrics.observe("RetryDrainSettled", settled)
+        logger.info(

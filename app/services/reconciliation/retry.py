@@ -180,3 +180,14 @@ class RetryScheduler:
             .where(ReconciliationItem.status.in_(RETRYABLE_STATUSES))
             .with_for_update(skip_locked=True)
         )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def drain(self, *, limit: int) -> int:
+        """Work through the retryable backlog, oldest ``next_attempt_at`` first.
+
+        Serial on purpose: the whole point of the backoff column is to stop hammering a
+        degraded acquirer, and firing ``limit`` retries concurrently would undo it.
+        """
+        async with self._sessions.begin() as session:
+            item_ids = await self._items.list_retryable_ids(session, limit=limit)
