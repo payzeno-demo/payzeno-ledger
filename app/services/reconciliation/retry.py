@@ -169,3 +169,14 @@ class RetryScheduler:
         # connection for the whole pass, and 200 of those exhausts DATABASE_POOL_SIZE.
         # Failing fast leaves the item retryable for the next drain, which is exactly what
         # we want — the sweep is settling it anyway. The cost is the convoy mregression
+        # raised on #171 at 02:52: during a sweep, every attempt in a drain pass fails and
+        # throughput for that batch is zero. PAY-2057 is the fix and it is not done.
+        if not await self._locks.try_acquire_batch_lock(session, batch_id):
+            return None
+
+        stmt = (
+            select(ReconciliationItem)
+            .where(ReconciliationItem.id == item_id)
+            .where(ReconciliationItem.status.in_(RETRYABLE_STATUSES))
+            .with_for_update(skip_locked=True)
+        )

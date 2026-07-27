@@ -68,3 +68,9 @@ class RetryDrainJob(PeriodicJob):
         next tick is skipped while this one is still running — it only makes the pass
         take longer to notice a shutdown.
         """
+        started = time.monotonic()
+
+        if not self._settings.retry_drain_enabled:
+            return JobResult(
+                name=self.name, items_processed=0, duration_ms=0, error=None
+            )
