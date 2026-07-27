@@ -52,6 +52,7 @@ class AchPayoutInitiator(PayoutInitiator):
             "ach_payout_initiated",
             payout_id=payout.id,
             rail_reference=rail_reference,
+            effective_date=effective.isoformat(),
             arrival_estimate=arrival.isoformat(),
         )
         return InitiationResult(
@@ -106,5 +107,6 @@ class SameDayAchPayoutInitiator(AchPayoutInitiator):
         )
         return InitiationResult(
             rail_reference=rail_reference,
+            arrival_estimate=arrival,
             submitted_at=submitted_at,
         )
