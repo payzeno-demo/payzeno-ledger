@@ -43,7 +43,14 @@ class StubCalendar:
             day = date.fromordinal(day.toordinal() + 1)
         return day
 
+    def is_business_day(self, day: date, currency: str, rail: str) -> bool:
+        return day.weekday() < 5
+
+
+class StubSettings:
     payout_cutoff_ach_utc = "21:00"
+    payout_cutoff_same_day_ach_utc = "16:45"
+    payout_cutoff_sepa_utc = "14:00"
     payout_cutoff_faster_payments_utc = "17:30"
 
 
@@ -122,6 +129,8 @@ async def test_every_rail_declares_its_method(
 async def test_every_rail_returns_a_complete_initiation_result(
     cls: type, method: str, currency: str, country: str
 ) -> None:
+    initiator = _initiator(cls)
+
     result = await initiator.initiate(
         object(),
         _payout(method=method, currency=currency),
@@ -135,6 +144,21 @@ async def test_every_rail_returns_a_complete_initiation_result(
 
 @pytest.mark.parametrize(("cls", "method", "currency", "country"), ALL_INITIATORS)
 async def test_every_rail_refuses_an_unverified_bank_account(
+    cls: type, method: str, currency: str, country: str
+) -> None:
+    """`_assert_usable` on the base. Four rails, one guard, no way to skip it."""
+    initiator = _initiator(cls)
+
+    with pytest.raises(BankAccountUnusableError):
+        await initiator.initiate(
+            object(),
+            _payout(method=method, currency=currency),
+            _bank(status="pending", currency=currency, country=country),
+        )
+
+
+@pytest.mark.parametrize(("cls", "method", "currency", "country"), ALL_INITIATORS)
+async def test_every_rail_asks_the_calendar_for_its_own_arrival_date(
     cls: type, method: str, currency: str, country: str
 ) -> None:
     """Four jurisdictions, four calendars. The rail name has to reach the calendar."""
@@ -169,6 +193,9 @@ async def test_same_day_ach_extends_standard_ach() -> None:
 
 async def test_same_day_ach_arrives_before_standard_ach() -> None:
     standard = _initiator(AchPayoutInitiator)
+    same_day = _initiator(SameDayAchPayoutInitiator)
+
+    slow = await standard.initiate(object(), _payout(method="ach"), _bank())
     fast = await same_day.initiate(
         object(), _payout(method="same_day_ach"), _bank()
     )
@@ -179,6 +206,42 @@ async def test_same_day_ach_arrives_before_standard_ach() -> None:
 async def test_ach_reference_carries_the_payout_id() -> None:
     """Treasury greps for the payout id when a bank asks about a trace number."""
     initiator = _initiator(AchPayoutInitiator)
+
+    result = await initiator.initiate(object(), _payout(), _bank())
+
+    assert "po_rail_1" in result.rail_reference
+
+
+async def test_sepa_refuses_a_non_euro_payout() -> None:
+    initiator = _initiator(SepaPayoutInitiator)
+
+    with pytest.raises(BankAccountUnusableError):
+        await initiator.initiate(
+            object(),
+            _payout(method="sepa", currency="EUR"),
+            _bank(currency="USD", country="US"),
+        )
+
+
+async def test_faster_payments_refuses_a_non_gbp_payout() -> None:
+    initiator = _initiator(FasterPaymentsPayoutInitiator)
+
+    with pytest.raises(BankAccountUnusableError):
+        await initiator.initiate(
+            object(),
+            _payout(method="faster_payments", currency="GBP"),
+            _bank(currency="EUR", country="DE"),
+        )
+
+
+# --------------------------------------------------------------------------------------
+# the debit puller — the one rail that moves money the other way
+# --------------------------------------------------------------------------------------
+
+
+class StubBanks:
+    def __init__(self, bank: Any) -> None:
+        self.bank = bank
 
     async def get_default(self, session: Any, *, merchant_id: str, currency: str) -> Any:
         return self.bank
@@ -195,6 +258,16 @@ class StubLedger:
 
 
 async def test_debit_pull_posts_and_returns_a_rail_reference() -> None:
+    """Negative balance recovery. Rare, and the one place we debit a merchant's bank."""
+    ledger = StubLedger()
+    puller = AchPayoutPuller(
+        banks=StubBanks(_bank()),
+        ledger=ledger,
+        calendar=StubCalendar(),
+        settings=StubSettings(),
+        clock=FrozenClock(NOW),
+    )
+
     result = await puller.pull(
         object(),
         merchant_id="mer_rail",
@@ -209,3 +282,19 @@ async def test_debit_pull_posts_and_returns_a_rail_reference() -> None:
 
 
 async def test_debit_pull_refuses_an_unusable_account() -> None:
+    puller = AchPayoutPuller(
+        banks=StubBanks(_bank(status="errored")),
+        ledger=StubLedger(),
+        calendar=StubCalendar(),
+        settings=StubSettings(),
+        clock=FrozenClock(NOW),
+    )
+
+    with pytest.raises(BankAccountUnusableError):
+        await puller.pull(
+            object(),
+            merchant_id="mer_rail",
+            currency="USD",
+            amount_minor=25_000,
+            reason="negative_balance_recovery",
+        )

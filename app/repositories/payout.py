@@ -67,6 +67,21 @@ class PayoutRepository(BaseRepository[Payout]):
         ``available_on`` is a banking-calendar date computed by
         ``BankingCalendar.next_business_day`` — not ledger booking time, which is a
         different thing and would pay merchants on bank holidays.
+        """
+        stmt = (
+            select(Payout)
+            .where(Payout.status == "scheduled")
+            .where(Payout.available_on <= on)
+            .order_by(Payout.available_on, Payout.created_at)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_for_merchant(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
         status: str | None = None,
         limit: int = 100,
     ) -> list[Payout]:
@@ -202,3 +217,8 @@ class PayoutRepository(BaseRepository[Payout]):
     async def count_by_status(
         self, session: AsyncSession, *, merchant_id: str | None = None
     ) -> dict[str, int]:
+        """Payout counts per status, for the ops dashboard."""
+        stmt = select(Payout.status, func.count()).group_by(Payout.status)
+        if merchant_id is not None:
+            stmt = stmt.where(Payout.merchant_id == merchant_id)
+        return {row[0]: int(row[1]) for row in (await session.execute(stmt)).all()}

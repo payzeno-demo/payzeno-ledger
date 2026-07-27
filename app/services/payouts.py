@@ -107,6 +107,7 @@ class PayoutCalculator:
         posted = await self._entries.sum_by_account_and_purpose(
             session,
             merchant_id=merchant_id,
+            currency=currency,
             livemode=True,
             as_of=cutoff,
         )
@@ -214,6 +215,7 @@ class PayoutService:
             currency=currency,
             status="scheduled",
             method=method,
+            available_on=available_on,
             statement_descriptor=str(req.get("statement_descriptor") or "PAYZENO PAYOUT")[:22],
             livemode=True,
         )
@@ -225,8 +227,37 @@ class PayoutService:
             purpose="payout",
             merchant_id=merchant_id,
             currency=currency,
+            livemode=True,
+            reference_type="payout",
             reference_id=payout.id,
+            lines=[
+                PostingLine(
+                    account_type="merchant_payable", direction="debit", amount_minor=requested
+                ),
+                PostingLine(account_type="cash", direction="credit", amount_minor=requested),
+            ],
             created_by="system",
+            request_fingerprint=ledger_key("payoutfp", merchant_id, payout.id),
+        )
+        payout.ledger_transaction_id = posted.transaction.id
+
+        result = await initiator.initiate(session, payout, bank)
+        payout.arrival_estimate = result.arrival_estimate
+        payout.bank_reference = result.rail_reference
+        payout.initiated_at = result.submitted_at
+
+        await self._publisher.publish(
+            "payout.scheduled",
+            {
+                "payout_id": payout.id,
+                "merchant_id": merchant_id,
+                "bank_account_id": bank.bank_account_id,
+                "amount_minor": requested,
+                "currency": currency,
+                "method": method,
+                "available_on": available_on.isoformat(),
+                "scheduled_at": self._clock.now().isoformat(),
+            },
             merchant_id=merchant_id,
             correlation_id=payout.id,
             session=session,
@@ -236,6 +267,45 @@ class PayoutService:
             payout_id=payout.id,
             merchant_id=merchant_id,
             amount_minor=requested,
+            method=method,
+        )
+        return payout
+
+    async def cancel_payout(self, session: AsyncSession, payout_id: str) -> Payout:
+        payout = await self._payouts.get_or_raise(session, payout_id)
+        if payout.status not in ("scheduled",):
+            raise PayoutBlockedError(
+                f"payout {payout_id} is {payout.status} and cannot be cancelled",
+                payout_id=payout_id,
+                status=payout.status,
+            )
+        payout.status = "canceled"
+        reversal = await self._reverse_payout_posting(session, payout, reason="canceled")
+        payout.reversal_transaction_id = reversal
+        logger.info("payout_canceled", payout_id=payout_id)
+        return payout
+
+    async def mark_paid(
+        self, session: AsyncSession, payout_id: str, *, paid_at: datetime, bank_reference: str
+    ) -> Payout:
+        await self._locks.acquire_item_lock(session, payout_id)
+        payout = await self._payouts.get_or_raise(session, payout_id)
+        if payout.status == "paid":
+            return payout
+        payout.status = "paid"
+        payout.paid_at = paid_at
+        payout.bank_reference = bank_reference
+        await self._publisher.publish(
+            "payout.paid",
+            {
+                "payout_id": payout.id,
+                "merchant_id": payout.merchant_id,
+                "amount_minor": payout.amount_minor,
+                "currency": payout.currency,
+                "ledger_transaction_id": payout.ledger_transaction_id,
+                "paid_at": paid_at.isoformat(),
+            },
+            merchant_id=payout.merchant_id,
             correlation_id=payout.id,
             session=session,
         )
@@ -289,6 +359,7 @@ class PayoutService:
                 "retry_scheduled_for": None,
                 "failed_at": payout.failed_at.isoformat(),
             },
+            merchant_id=payout.merchant_id,
             correlation_id=payout.id,
             session=session,
         )
@@ -319,8 +390,25 @@ class PayoutService:
         returned = await self._payouts.mark_returned(
             session,
             payout.id,
+            failure_code=failure_code,
             failure_message=failure_message,
             reversal_transaction_id=reversal,
+            at=self._clock.now(),
+        )
+        await self._publisher.publish(
+            "payout.returned",
+            {
+                "payout_id": returned.id,
+                "merchant_id": returned.merchant_id,
+                "bank_account_id": returned.bank_account_id,
+                "amount_minor": returned.amount_minor,
+                "currency": returned.currency,
+                "failure_code": failure_code,
+                "failure_message": failure_message,
+                "reversal_transaction_id": reversal,
+                "bank_reference": returned.bank_reference,
+                "returned_at": returned.returned_at.isoformat(),
+            },
             merchant_id=returned.merchant_id,
             correlation_id=returned.id,
             session=session,
@@ -330,6 +418,15 @@ class PayoutService:
             "payout_returned",
             payout_id=returned.id,
             failure_code=failure_code,
+            reversal_transaction_id=reversal,
+        )
+        return returned
+
+    async def _reverse_payout_posting(
+        self, session: AsyncSession, payout: Payout, *, reason: str
+    ) -> str:
+        posted = await self._ledger.post(
+            session,
             idempotency_key=ledger_key("payoutrev", payout.merchant_id, payout.id),
             purpose="payout_reversal",
             merchant_id=payout.merchant_id,

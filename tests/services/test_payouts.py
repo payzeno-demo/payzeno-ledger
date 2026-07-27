@@ -47,12 +47,22 @@ class RecordingLocks(AdvisoryLockManager):
         self.merchant_currency: list[str] = []
         self.item_locks: list[str] = []
 
+    async def acquire_merchant_currency_lock(
+        self, session: Any, merchant_id: str, currency: str
+    ) -> None:
+        self.merchant_currency.append(f"{merchant_id}:{currency}")
+
     async def acquire_item_lock(self, session: Any, item_id: str) -> None:
         self.item_locks.append(item_id)
 
 
 class StubEntries:
     """`sum_by_account_and_purpose` — the arc PERF query behind the calculator."""
+
+    def __init__(self, *, credits: int = 0, debits: int = 0) -> None:
+        self.credits = credits
+        self.debits = debits
+        self.calls: list[dict[str, Any]] = []
 
     async def sum_by_account_and_purpose(
         self,
@@ -71,6 +81,11 @@ class StubEntries:
 
 
 class StubPayouts:
+    def __init__(self, *, in_flight: int = 0, rows: dict[str, Any] | None = None) -> None:
+        self.in_flight = in_flight
+        self.rows: dict[str, Any] = rows or {}
+        self.added: list[Any] = []
+
     async def sum_in_flight(
         self, session: Any, *, merchant_id: str, currency: str
     ) -> int:
@@ -97,21 +112,98 @@ class StubBanks:
     def __init__(self, bank: Any) -> None:
         self.bank = bank
 
+    async def get_default(self, session: Any, *, merchant_id: str, currency: str) -> Any:
+        return self.bank
+
+
+class StubCalendar:
+    def __init__(self) -> None:
+        self.calls: list[tuple[date, str, str]] = []
+
+    def next_business_day(self, day: date, currency: str, rail: str) -> date:
+        self.calls.append((day, currency, rail))
+        return date(2026, 4, 20)
+
+    def is_business_day(self, day: date, currency: str, rail: str) -> bool:
+        return day.weekday() < 5
+
+
+class StubInitiator:
     method = "ach"
 
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.calls: list[str] = []
+        self.raises = raises
+
+    async def initiate(self, session: Any, payout: Any, bank: Any) -> Any:
+        if self.raises is not None:
+            raise self.raises
+        self.calls.append(payout.id)
+        return type(
+            "InitiationResult",
+            (),
+            {
+                "rail_reference": f"ACH-{payout.id}",
+                "arrival_estimate": date(2026, 4, 20),
+                "submitted_at": NOW,
+            },
+        )()
+
+
+class StubLedger:
+    def __init__(self) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self._seq = 0
+
+    async def post(self, session: Any, **kwargs: Any) -> Any:
+        self._seq += 1
+        self.posts.append(kwargs)
+        transaction = type("Txn", (), {"id": f"txn_po_{self._seq}"})()
+        return type("PostResult", (), {"transaction": transaction, "created": True})()
+
+
+def _bank(status: str = "verified") -> Any:
+    return type(
+        "BankAccountProjection",
+        (),
+        {
+            "id": "ba_1",
+            "merchant_id": "mer_payout",
+            "currency": "USD",
+            "status": status,
+            "account_number_token": "tok_bank_1",
+            "account_last_four": "4242",
+            "country": "US",
+            "is_default": True,
+        },
+    )()
+
+
+def _service(
     *,
     merchant_status: str = "active",
     credits: int = 100_000,
     debits: int = 0,
+    in_flight: int = 0,
     bank_status: str = "verified",
     initiator: StubInitiator | None = None,
 ):
+    merchant = make_merchant_projection(
+        merchant_id="mer_payout",
+        status=merchant_status,
+        payout_delay_days=2,
+        source_occurred_at=NOW,
+    )
     entries = StubEntries(credits=credits, debits=debits)
     payouts = StubPayouts(in_flight=in_flight)
+    merchants = StubMerchants(merchant)
     calculator = PayoutCalculator(
         entries=entries, payouts=payouts, merchants=merchants
     )
+    locks = RecordingLocks()
+    ledger = StubLedger()
     publisher = CollectingPublisher()
+    initiators = {"ach": initiator or StubInitiator()}
     service = PayoutService(
         locks=locks,
         payouts=payouts,
@@ -147,6 +239,54 @@ async def test_compute_available_subtracts_payouts_already_in_flight() -> None:
     Without this the second `create_payout` sees the same balance the first one did.
     """
     _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=4_180)
+
+    available = await calculator.compute_available(object(), "mer_payout", "USD", NOW)
+
+    assert available.amount_minor == 0
+
+
+async def test_compute_available_only_looks_at_merchant_payable() -> None:
+    """Reserve is a different account and is not in the formula.
+
+    `capture` credited `reserve`, not `merchant_payable`. Subtracting reserve here would
+    deduct money that was never added.
+    """
+    _, calculator, _, _, _, _ = _service(credits=9_680)
+    entries = calculator._entries  # noqa: SLF001 - asserting the query shape on purpose
+
+    await calculator.compute_available(object(), "mer_payout", "USD", NOW)
+
+    assert {call["account_type"] for call in entries.calls} == {"merchant_payable"}
+
+
+async def test_compute_available_detail_reports_its_own_arithmetic() -> None:
+    _, calculator, _, _, _, _ = _service(credits=9_680, debits=5_500, in_flight=1_000)
+
+    detail = await calculator.compute_available_detail(object(), "mer_payout", "USD", NOW)
+
+    assert detail.posted_minor == 9_680 - 5_500
+    assert detail.in_flight_minor == 1_000
+    assert detail.amount.amount_minor == 3_180
+
+
+# --------------------------------------------------------------------------------------
+# PayoutService.create_payout
+# --------------------------------------------------------------------------------------
+
+
+async def test_create_payout_takes_the_merchant_currency_lock_first() -> None:
+    """Advisory then row, everywhere. ADR 0011."""
+    service, _, locks, _, _, _ = _service()
+
+    await service.create_payout(
+        object(), merchant_id="mer_payout", req={"amount_minor": 5_000, "currency": "USD", "method": "ach"}
+    )
+
+    assert locks.merchant_currency == ["mer_payout:USD"]
+
+
+async def test_create_payout_posts_the_ledger_transaction() -> None:
+    service, _, _, ledger, _, _ = _service()
 
     payout = await service.create_payout(
         object(),
@@ -213,6 +353,24 @@ async def test_create_payout_refuses_an_unverified_bank_account() -> None:
 
 async def test_mark_paid_takes_the_item_lock_keyed_on_payout_id(_seeded_payout) -> None:
     service, payouts, payout_id = _seeded_payout
+    locks = service._locks  # noqa: SLF001
+
+    await service.mark_paid(
+        object(), payout_id, paid_at=NOW, bank_reference="BANK-REF-1"
+    )
+
+    assert locks.item_locks == [payout_id]
+
+
+async def test_mark_failed_reverses_the_payout_posting(_seeded_payout) -> None:
+    """Invariant 7. `failed` is terminal, so without the reversal the money is gone.
+
+    `payout` already debited `merchant_payable`. If nothing credits it back the merchant
+    has permanently lost the amount and there is no state left to correct it from.
+    """
+    service, payouts, payout_id = _seeded_payout
+    ledger = service._ledger  # noqa: SLF001
+
     payout = await service.mark_failed(
         object(),
         payout_id,
@@ -227,6 +385,18 @@ async def test_mark_paid_takes_the_item_lock_keyed_on_payout_id(_seeded_payout) 
 async def test_mark_failed_emits_payout_failed(_seeded_payout) -> None:
     """The console learns about this over the WebSocket relay, so it has to be published."""
     service, payouts, payout_id = _seeded_payout
+    publisher = service._publisher  # noqa: SLF001
+
+    await service.mark_failed(
+        object(), payout_id, failure_code="bank_rejected", failure_message="rejected"
+    )
+
+    assert "payout.failed" in publisher.event_types()
+
+
+@pytest.fixture
+async def _seeded_payout():
+    service, _, _, _, _, payouts = _service()
     payout = await service.create_payout(
         object(),
         merchant_id="mer_payout",
