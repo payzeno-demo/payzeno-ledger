@@ -119,6 +119,19 @@ class LedgerAuditService:
         logger.info(
             "trial_balance_ok",
             currency=currency,
+            credit_minor=result.credit_minor,
+        )
+        return result
+
+    async def check_duplicate_settlements(self, *, since: datetime | None = None) -> int:
+        """Invariant (1): exactly one ``settle`` transaction per settled charge.
+
+        This is the check that would have caught PAY-2041 on the first sweep. It did not
+        exist then, because every check that did exist was a *balance* check and a
+        duplicate settlement balances perfectly.
+        """
+        window_start = since or (self._clock.now() - DUPLICATE_LOOKBACK)
+        async with self._sessions.begin() as session:
             duplicates = await self._transactions.list_duplicate_idempotency_keys(
                 session, purpose="settle", since=window_start
             )
@@ -155,6 +168,7 @@ class LedgerAuditService:
         await self._requests.add(session, record)
         logger.info(
             "adjustment_requested",
+            merchant_id=merchant_id,
             reason_code=reason_code,
             requested_by=requested_by,
         )
@@ -196,8 +210,19 @@ class LedgerAuditService:
         ]
         posted = await self._ledger.post(
             session,
+            idempotency_key=ledger_key("adjustment", record.id, record.reason_code),
             merchant_id=record.merchant_id,
+            livemode=record.livemode,
             created_by="admin",
+            request_fingerprint=ledger_key("adjustmentfp", record.id, approved_by),
+        )
+
+        record.approved_by = approved_by
+        record.approved_at = self._clock.now()
+        record.status = "posted"
+        record.posted_transaction_id = posted.transaction.id
+        logger.info(
+            "adjustment_approved",
             request_id=record.id,
             transaction_id=posted.transaction.id,
             note=approver_note[:120],
