@@ -196,11 +196,25 @@ class MarkPayoutPaidRequest(BaseModel):
     bank_reference: str = Field(min_length=1, max_length=255)
 
 
+class MarkPayoutFailedRequest(BaseModel):
+    failure_code: str
+    failure_message: str = Field(max_length=1000)
+
+
 class RunTrialBalanceRequest(BaseModel):
     """``POST /internal/v1/ops/audit/trial-balance``. Staff-only, not in ``types.ts``."""
 
     currency: str
     as_of: datetime | None = None
+
+
+class RequestAdjustmentRequest(BaseModel):
+    """``POST /internal/v1/ops/adjustments`` — the maker half of maker-checker."""
+
+    merchant_id: str | None = None
+    currency: str
+    lines: list[PostTransactionLine]
+    reason_code: str = Field(min_length=1, max_length=64)
 
 
 class ApproveAdjustmentRequest(BaseModel):
@@ -275,3 +289,9 @@ class SettlementImportResponse(BaseModel):
     item_count: int
 
 
+#: Statuses the settlement-item list endpoint will filter on. Restated as a Literal so
+#: FastAPI rejects a typo in the query string instead of quietly returning zero rows —
+#: which is what ``?status=retriable`` did for a whole afternoon in month 6.
+ItemStatusFilter = Literal[
+    "pending", "settling", "retryable", "settled", "failed", "orphaned", "needs_review"
+]

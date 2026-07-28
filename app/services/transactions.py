@@ -167,6 +167,8 @@ class LedgerPoster:
         await self._entries.add_all(session, entries)
         await self._apply_balance_delta(
             session,
+            merchant_id=merchant_id,
+            currency=currency,
             livemode=livemode,
             entries=entries,
             transaction_id=transaction.id,
@@ -179,6 +181,7 @@ class LedgerPoster:
             transaction_id=transaction.id,
             purpose=purpose,
             merchant_id=merchant_id,
+            currency=currency,
             entry_count=len(entries),
         )
         return PostResult(transaction=transaction, created=True)
@@ -215,6 +218,7 @@ class LedgerPoster:
             },
             merchant_id=transaction.merchant_id,
             correlation_id=transaction.id,
+            session=session,
             livemode=transaction.livemode,
         )
 
@@ -253,6 +257,11 @@ class LedgerPoster:
             reference_id=original.id,
             lines=flipped,
             created_by=created_by,
+            request_fingerprint=original.request_fingerprint,
+        )
+        result.transaction.reverses_transaction_id = original.id
+        logger.info(
+            "ledger_transaction_reversed",
             transaction_id=result.transaction.id,
             reverses=original.id,
             reason=reason,
@@ -320,6 +329,7 @@ class LedgerPoster:
             return
         await self._balances.apply_delta(
             session,
+            merchant_id=merchant_id,
             currency=currency,
             livemode=livemode,
             available_delta=available,
