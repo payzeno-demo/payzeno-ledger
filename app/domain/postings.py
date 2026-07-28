@@ -54,6 +54,7 @@ class PostingContext:
         return Money(amount_minor=amount_minor, currency=self.currency)
 
 
+@dataclass(frozen=True, slots=True)
 class PostingLine:
     """One leg of a balanced transaction.
 
