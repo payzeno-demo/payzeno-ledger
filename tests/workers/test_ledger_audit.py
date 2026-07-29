@@ -57,6 +57,12 @@ class StubAudit:
         self.checks.append("balance_cache_drift")
         return self.drift
 
+    async def check_unmatched_captures(self, *, limit: int = 500) -> int:
+        self.checks.append("unmatched_captures")
+        return self.unmatched_captures
+
+
+class Settings:
     def __init__(self, *, enabled: bool = True) -> None:
         self.ledger_audit_enabled = enabled
         self.ledger_audit_interval_seconds = 86400
@@ -70,6 +76,28 @@ def _job(audit: StubAudit, *, enabled: bool = True) -> LedgerAuditJob:
 
 
 async def test_interval_is_daily() -> None:
+    job = _job(StubAudit())
+
+    assert job.interval_seconds == 86400
+    assert job.name == "ledger_audit"
+
+
+async def test_a_clean_night_runs_every_check() -> None:
+    job = _job(audit)
+
+    job = _job(audit)
+
+    await job.run_once()
+
+    assert audit.currencies == ["USD", "EUR", "GBP"]
+
+
+async def test_a_failed_trial_balance_does_not_skip_the_duplicate_check() -> None:
+    """The lesson from the postmortem, encoded.
+
+    Learning one thing per night is how a three-hour incident becomes a three-day one.
+    """
+    audit = StubAudit(trial_balance_raises=LedgerIntegrityError("out by 4180"))
     job = _job(audit)
 
     result = await job.run_once()
@@ -81,3 +109,7 @@ async def test_interval_is_daily() -> None:
 
 async def test_duplicates_are_counted_into_the_pass(sessions_factory) -> None:
     audit = StubAudit(duplicates=1_847)
+    """`LEDGER_AUDIT_ENABLED=false` exists for the cutover, and for nothing else."""
+    audit = StubAudit()
+    job = _job(audit, enabled=False)
+

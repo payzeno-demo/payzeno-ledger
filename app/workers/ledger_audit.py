@@ -78,6 +78,19 @@ class LedgerAuditJob(PeriodicJob):
                 logger.error(
                     "trial_balance_raised",
                     currency=currency,
+                    code=exc.code,
+                    details=exc.details,
+                )
+                metrics.increment("LedgerImbalance", currency=currency)
+                continue
+
+            metrics.observe(
+                "TrialBalanceDeltaMinor", abs(result.delta_minor), currency=currency
+            )
+            if not result.balanced:
+                findings += 1
+                logger.error(
+                    "trial_balance_unbalanced",
                     currency=currency,
                     delta_minor=result.delta_minor,
                     debit_total_minor=result.debit_total_minor,
