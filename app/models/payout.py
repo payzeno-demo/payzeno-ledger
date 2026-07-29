@@ -74,10 +74,12 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     entity_name: ClassVar[str] = "payout"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(Text, nullable=False)
     #: payzeno-api's `bank_account.id`. Resolved through `bank_account_projection` —
     #: there is no ledger→api route on the payout path.
     bank_account_id: Mapped[str] = mapped_column(Text, nullable=False)
 
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
     status: Mapped[str] = mapped_column(
         payout_status_enum, nullable=False, server_default="scheduled"
@@ -90,9 +92,13 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     arrival_estimate: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
     statement_descriptor: Mapped[str] = mapped_column(String(22), nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(payout_failure_code_enum, nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     ledger_transaction_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
+    )
+    reversal_transaction_id: Mapped[str | None] = mapped_column(
         Text, ForeignKey("ledger_transaction.id", ondelete="RESTRICT"), nullable=True
     )
     #: The rail's own reference, returned by `PayoutInitiator.initiate`.
@@ -131,6 +137,10 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
             postgresql_where="status in ('scheduled','in_transit')",
         ),
     )
+
+    def is_in_flight(self) -> bool:
+        """Money has left the payable balance but has not landed."""
+        return self.status in IN_FLIGHT_STATUSES
 
     def requires_reversal(self) -> bool:
         """Whether ``chk_payout_reversal_present`` applies to this row's status."""

@@ -59,6 +59,21 @@ class PayoutRepository(BaseRepository[Payout]):
         the same balance twice. Note what this read cannot see: a payout another
         connection has inserted but not committed. That is why the calculator runs under
         the merchant-currency advisory lock, and why the partial index is unique.
+        """
+        stmt = (
+            select(func.coalesce(func.sum(Payout.amount_minor), 0))
+            .where(Payout.merchant_id == merchant_id)
+            .where(Payout.currency == currency)
+            .where(Payout.livemode == livemode)
+            .where(Payout.status.in_(IN_FLIGHT_STATUSES))
+        )
+        return int((await session.execute(stmt)).scalar_one())
+
+    async def list_due(
+        self,
+        session: AsyncSession,
+        *,
+        on: dt.date,
         limit: int = 500,
     ) -> list[Payout]:
         """Scheduled payouts whose ``available_on`` has arrived.
@@ -188,6 +203,14 @@ class PayoutRepository(BaseRepository[Payout]):
         failure_code: str,
         failure_message: str,
         reversal_transaction_id: str,
+        at: dt.datetime | None = None,
+    ) -> Payout:
+        """An ACH return after the payout had already been marked paid.
+
+        Same reversal requirement as :meth:`mark_failed` and for the same reason. The
+        distinct status matters to support: ``failed`` means the rail never took it,
+        ``returned`` means the receiving bank sent it back afterwards, and the merchant
+        conversation is not the same one.
         """
         payout = await self.get_or_raise(session, payout_id)
         payout.status = "returned"
