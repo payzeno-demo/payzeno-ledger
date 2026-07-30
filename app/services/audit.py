@@ -119,6 +119,7 @@ class LedgerAuditService:
         logger.info(
             "trial_balance_ok",
             currency=currency,
+            debit_minor=result.debit_minor,
             credit_minor=result.credit_minor,
         )
         return result
@@ -213,18 +214,61 @@ class LedgerAuditService:
                 "sample_transaction_ids": samples,
                 "detected_at": self._clock.now().isoformat(),
             },
+            merchant_id=merchant_id,
             correlation_id=f"audit:{check}:{currency}",
+            session=session,
+        )
+
+
+class AdjustmentService:
+    """Maker-checker for manual ledger adjustments.
+
+    ``AdjustmentPostingRule`` is reachable only through an approved request. A human
+    posting arbitrary entries against merchant money with no approval record is the
+    first thing an auditor asks about, and this database has no ``audit_log`` table to
+    fall back on.
+    """
+
+    def __init__(
+        self,
+        requests: LedgerAdjustmentRequestRepository,
+        ledger: LedgerPoster,
+        clock: Clock,
+    ) -> None:
+        self._requests = requests
+        self._ledger = ledger
+        self._clock = clock
+
+    async def request(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str | None,
+        currency: str,
+        lines: list[dict[str, object]],
+        reason_code: str,
+        requested_by: str,
+    ) -> LedgerAdjustmentRequest:
+        if not lines:
+            raise ValidationError("an adjustment needs at least one line", reason_code=reason_code)
+        if not reason_code:
+            raise ValidationError("reason_code is required", merchant_id=merchant_id)
+
+        record = LedgerAdjustmentRequest(
             id=ledger_key("lar", requested_by, reason_code)[:26],
             merchant_id=merchant_id,
             currency=currency,
+            lines=lines,
             reason_code=reason_code,
             requested_by=requested_by,
             requested_at=self._clock.now(),
+            status="pending",
             livemode=True,
         )
         await self._requests.add(session, record)
         logger.info(
             "adjustment_requested",
+            request_id=record.id,
             merchant_id=merchant_id,
             reason_code=reason_code,
             requested_by=requested_by,
@@ -268,9 +312,12 @@ class LedgerAuditService:
         posted = await self._ledger.post(
             session,
             idempotency_key=ledger_key("adjustment", record.id, record.reason_code),
+            purpose="adjustment",
             merchant_id=record.merchant_id,
             currency=record.currency,
             livemode=record.livemode,
+            reference_type="ledger_adjustment_request",
+            reference_id=record.id,
             lines=posting_lines,
             created_by="admin",
             request_fingerprint=ledger_key("adjustmentfp", record.id, approved_by),
@@ -283,6 +330,7 @@ class LedgerAuditService:
         logger.info(
             "adjustment_approved",
             request_id=record.id,
+            approved_by=approved_by,
             transaction_id=posted.transaction.id,
             note=approver_note[:120],
         )

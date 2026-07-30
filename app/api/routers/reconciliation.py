@@ -111,6 +111,7 @@ def _serialise_run(run: Any) -> dict[str, Any]:
 @router.post(
     "/runs",
     response_model=ReconciliationRun,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Reconcile one settlement batch now",
 )
 async def start_run(
@@ -149,6 +150,16 @@ async def start_run(
         trigger=body.trigger or "manual",
         caller=caller,
     )
+    run = await reconciler.reconcile_batch(
+        body.batch_id,
+        trigger=body.trigger or "manual",
+        max_items=body.max_items or 5000,
+    )
+    return _serialise_run(run)
+
+
+@router.get(
+    "/runs/{run_id}",
     response_model=ReconciliationRun,
     summary="Fetch one reconciliation run",
 )
@@ -165,6 +176,7 @@ async def get_run(
 
 @router.post(
     "/items/{item_id}/retry",
+    response_model=ReconciliationItem,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Retry one reconciliation item",
 )
@@ -228,6 +240,7 @@ async def retry_item(
 )
 async def get_backlog(
     backlog: BacklogDep,
+    currency: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
     batch_id: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     """Drives the ops dashboard tile and the ``LedgerReconciliationBacklog`` alarm.

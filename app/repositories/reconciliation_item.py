@@ -164,6 +164,20 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         ``settled_transaction_id`` is invariant (4) of `data-model.md` §6 — every settled
         item points at a transaction that exists — and it is what let the incident's
         cleanup query find the 1,847 items that pointed at a *second* transaction.
+        """
+        item = await self.get_or_raise(session, item_id)
+        item.status = "settled"
+        item.settled_transaction_id = transaction_id
+        item.last_attempt_at = at
+        await session.flush()
+        return item
+
+    async def mark_status(
+        self,
+        session: AsyncSession,
+        item_id: str,
+        *,
+        status: str,
         error_code: str | None = None,
         at: dt.datetime | None = None,
     ) -> ReconciliationItem:
@@ -225,6 +239,20 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         *,
         statuses: frozenset[str],
         currency: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[BacklogRow]:
+        """Group the unsettled backlog by batch and status.
+
+        Backs ``GET /internal/v1/reconciliation/backlog``, which is what the ops console
+        polled every thirty seconds while the incident was being drained.
+
+        .. note::
+           TODO(PAY-2057): this returns every batch with retryable items, including ones
+           whose ``reconciliation_run`` is currently ``running``. The backlog service then
+           discovers that lock by lock — it retries an item, loses the batch lock, gets
+           ``None``, and moves on. Filtering here on
+           ``ReconciliationRunRepository.list_running_batch_ids`` would skip them up
+           front. Filed at 02:52 and still open.
         """
         stmt = (
             select(

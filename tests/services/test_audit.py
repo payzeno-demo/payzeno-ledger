@@ -42,6 +42,25 @@ class Totals:
 
 
 class DuplicateRow:
+    def __init__(self, key: str, count: int, currency: str, sample: str) -> None:
+        self.idempotency_key = key
+        self.count = count
+        self.currency = currency
+        self.sample_transaction_id = sample
+
+
+class StubEntries:
+    def __init__(
+        self,
+        *,
+        totals: Totals | None = None,
+        unbalanced: list[str] | None = None,
+        recomputed: dict[str, int] | None = None,
+    ) -> None:
+        self.totals = totals or Totals(1_000_000, 1_000_000)
+        self.unbalanced = unbalanced or []
+        self.recomputed = recomputed or {"merchant_payable": 0}
+
     async def trial_balance_by_currency(
         self, session: Any, *, currency: str, as_of: datetime
     ) -> Totals:
@@ -52,6 +71,11 @@ class DuplicateRow:
     ) -> list[str]:
         return self.unbalanced[:limit]
 
+    async def sum_by_account_and_purpose(self, session: Any, **kwargs: Any) -> dict[str, int]:
+        return self.recomputed
+
+
+class StubTransactions:
     def __init__(self, duplicates: list[DuplicateRow] | None = None) -> None:
         self.duplicates = duplicates or []
         self.calls: list[dict[str, Any]] = []
@@ -64,6 +88,14 @@ class DuplicateRow:
 
 
 class CacheRow:
+    def __init__(self, merchant_id: str, currency: str, available_minor: int) -> None:
+        self.merchant_id = merchant_id
+        self.currency = currency
+        self.available_minor = available_minor
+        self.livemode = True
+
+
+class StubBalances:
     def __init__(self, rows: list[CacheRow] | None = None) -> None:
         self.rows = rows or []
 
@@ -72,7 +104,10 @@ class CacheRow:
 
 
 def _audit(
+    *,
+    entries: StubEntries | None = None,
     transactions: StubTransactions | None = None,
+    balances: StubBalances | None = None,
     sessions=None,
 ):
     publisher = CollectingPublisher()
@@ -186,6 +221,12 @@ async def test_duplicate_check_defaults_to_a_bounded_lookback(sessions_factory) 
 
     await service.check_duplicate_settlements()
 
+    since = transactions.calls[0]["since"]
+    assert since < NOW
+    assert NOW - since <= timedelta(days=7)
+
+
+async def test_duplicate_check_honours_an_explicit_window(sessions_factory) -> None:
     transactions = StubTransactions()
     service, _ = _audit(transactions=transactions, sessions=sessions_factory)
     since = NOW - timedelta(hours=6)
@@ -212,6 +253,50 @@ async def test_cache_drift_is_reported_per_merchant(sessions_factory) -> None:
         entries=entries, balances=balances, sessions=sessions_factory
     )
 
+    drifted = await service.check_balance_cache_drift()
+
+    assert drifted == 1
+    assert "ledger.imbalance_detected" in publisher.event_types()
+
+
+async def test_cache_drift_reports_nothing_when_the_cache_agrees(sessions_factory) -> None:
+    balances = StubBalances([CacheRow("mer_ok", "USD", 4_180)])
+    entries = StubEntries(recomputed={"merchant_payable": 4_180})
+    service, publisher = _audit(
+        entries=entries, balances=balances, sessions=sessions_factory
+    )
+
+    assert await service.check_balance_cache_drift() == 0
+    assert publisher.event_types() == []
+
+
+# --------------------------------------------------------------------------------------
+# AdjustmentService — maker/checker
+# --------------------------------------------------------------------------------------
+
+
+class Record:
+    def __init__(self, **kwargs: Any) -> None:
+        self.id = kwargs.get("id", "adj_1")
+        self.merchant_id = kwargs.get("merchant_id", "mer_adj")
+        self.currency = kwargs.get("currency", "USD")
+        self.livemode = kwargs.get("livemode", True)
+        self.reason_code = kwargs.get("reason_code", "goodwill")
+        self.requested_by = kwargs.get("requested_by", "staff_a")
+        self.approved_by: str | None = None
+        self.approved_at: datetime | None = None
+        self.status = kwargs.get("status", "pending")
+        self.posted_transaction_id: str | None = None
+        self.lines = kwargs.get(
+            "lines",
+            [
+                {"account_type": "merchant_payable", "direction": "credit", "amount_minor": 500},
+                {"account_type": "platform_expense", "direction": "debit", "amount_minor": 500},
+            ],
+        )
+
+
+class StubRequests:
     def __init__(self, rows: dict[str, Record] | None = None) -> None:
         self.rows = rows or {}
 
@@ -235,6 +320,41 @@ class StubLedger:
 
 def _adjustments(rows: dict[str, Record] | None = None):
     requests = StubRequests(rows)
+    ledger = StubLedger()
+    service = AdjustmentService(requests=requests, ledger=ledger, clock=FrozenClock(NOW))
+    return service, requests, ledger
+
+
+async def test_requesting_an_adjustment_needs_lines() -> None:
+    service, _, _ = _adjustments()
+
+    with pytest.raises(ValidationError):
+        await service.request(
+            object(),
+            merchant_id="mer_adj",
+            currency="USD",
+            lines=[],
+            reason_code="goodwill",
+            requested_by="staff_a",
+        )
+
+
+async def test_requesting_an_adjustment_needs_a_reason_code() -> None:
+    """An auditor's first question is always "why", and the answer has to be a column."""
+    service, _, _ = _adjustments()
+
+    with pytest.raises(ValidationError):
+        await service.request(
+            object(),
+            merchant_id="mer_adj",
+            currency="USD",
+            lines=[{"account_type": "merchant_payable", "direction": "credit", "amount_minor": 500}],
+            reason_code="",
+            requested_by="staff_a",
+        )
+
+
+async def test_the_requester_cannot_approve_their_own_adjustment() -> None:
     """Dual control. `chk_adjustment_dual_control` says the same thing in the schema."""
     record = Record(requested_by="staff_a")
     service, _, ledger = _adjustments({record.id: record})
