@@ -237,3 +237,14 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         )
         rows = (await session.execute(grouped)).all()
         return [
+            DuplicateKeyRow(
+                idempotency_key=row.idempotency_key,
+                count=int(row.row_count),
+                currency=row.currency,
+                sample_transaction_id=row.sample_transaction_id,
+            )
+            for row in rows
+        ]
+
+    async def find_reversal_of(
+        self, session: AsyncSession, transaction_id: str
