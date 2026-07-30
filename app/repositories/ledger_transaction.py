@@ -237,3 +237,25 @@ class LedgerTransactionRepository(BaseRepository[LedgerTransaction]):
         )
         rows = (await session.execute(grouped)).all()
         return [
+            DuplicateKeyRow(
+                idempotency_key=row.idempotency_key,
+                count=int(row.row_count),
+                currency=row.currency,
+                sample_transaction_id=row.sample_transaction_id,
+            )
+            for row in rows
+        ]
+
+    async def find_reversal_of(
+        self, session: AsyncSession, transaction_id: str
+    ) -> LedgerTransaction | None:
+        """The compensating ``reversal`` posting for a transaction, if one exists.
+
+        ``ledger_entry`` is append-only, so a correction is always a new transaction
+        pointing back through ``reverses_transaction_id``. Migration ``0020`` used exactly
+        this shape to unwind the duplicates the incident produced.
+        """
+        stmt = select(LedgerTransaction).where(
+            LedgerTransaction.reverses_transaction_id == transaction_id
+        )
+        return (await session.execute(stmt)).scalars().first()
