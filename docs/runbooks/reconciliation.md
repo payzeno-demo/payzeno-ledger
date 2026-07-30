@@ -64,6 +64,32 @@ GROUP  BY 1, 2
 HAVING count(*) > 1;
 ```
 
+## Who holds the lock
+
+`AdvisoryLockManager` keys are `blake2b(batch_id, digest_size=4)` XOR `0x504159`, signed.
+You cannot compute it in your head. Get it from the service:
+
+```python
+from app.db.locks import AdvisoryLockManager
+AdvisoryLockManager().batch_key("sb_...")     # -> the int4 in pg_locks.objid
+```
+
+then:
+
+```sql
+SELECT l.pid, l.objid, a.state, a.query_start, now() - a.query_start AS held_for,
+       left(a.query, 120) AS query
+FROM   pg_locks l
+JOIN   pg_stat_activity a USING (pid)
+WHERE  l.locktype = 'advisory'
+  AND  l.classid  = 5259353          -- 0x504159, the PAY namespace
+ORDER  BY a.query_start;
+```
+
+A sweep holding the key for more than `RECONCILE_SWEEP_WALL_BUDGET_SECONDS` (30) is a bug —
+the guard transaction is supposed to commit and reopen at that cadence. A sweep holding it
+for minutes means the budget is not being honoured; capture the query and open a ticket.
+
 ## Drain throughput is zero and the backlog is not moving
 
 Almost always the lock convoy, and it is expected behaviour, not a fault. While a sweep of
