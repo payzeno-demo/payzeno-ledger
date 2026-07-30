@@ -50,6 +50,15 @@ async def test_interval_is_sixty_seconds_by_default() -> None:
 
 
 async def test_the_drain_runs_fourteen_times_inside_one_sweep_window() -> None:
+    """900 / 60. Not a coincidence anyone chose — a coincidence nobody noticed."""
+    drain = RetryDrainJob(scheduler=StubScheduler(), settings=Settings())
+
+    from app.workers.reconcile_sweep import ReconciliationSweepJob
+
+    class SweepSettings:
+        reconcile_sweep_interval_seconds = 900
+        reconcile_max_items_per_run = 500
+
     sweep = ReconciliationSweepJob(
         sessions=None, batches=None, service=None, settings=SweepSettings()
     )
@@ -60,6 +69,16 @@ async def test_the_drain_runs_fourteen_times_inside_one_sweep_window() -> None:
 async def test_a_disabled_drain_does_nothing_at_all() -> None:
     """The default. PAY-1688 rolled this out in stages and never finished."""
     scheduler = StubScheduler(settled=7)
+    job = RetryDrainJob(scheduler=scheduler, settings=Settings(enabled=False))
+
+    result = await job.run_once()
+
+    assert scheduler.calls == []
+    assert result.items_processed == 0
+    assert result.error is None
+
+
+async def test_an_enabled_drain_asks_for_the_configured_batch_size() -> None:
     scheduler = StubScheduler(settled=200)
     job = RetryDrainJob(scheduler=scheduler, settings=Settings(batch_size=200))
 
@@ -99,6 +118,14 @@ async def test_the_backlog_arithmetic_from_the_postmortem() -> None:
     interval_seconds = 60
     sweep_interval_seconds = 900
 
+    minutes_to_clear = (backlog / per_pass) * interval_seconds / 60
+    sweeps_landing_inside = int(minutes_to_clear * 60 // sweep_interval_seconds)
+
+    assert 20 <= minutes_to_clear <= 22
+    assert sweeps_landing_inside == 1  # per drain; four tasks, three overlaps observed
+
+
+async def test_a_drain_that_settles_nothing_still_reports_a_pass() -> None:
     scheduler = StubScheduler(settled=0)
     job = RetryDrainJob(scheduler=scheduler, settings=Settings())
 

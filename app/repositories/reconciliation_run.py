@@ -71,6 +71,7 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         items_settled: int,
         items_failed: int,
         status: str,
+        error_summary: str | None = None,
         at: dt.datetime | None = None,
     ) -> ReconciliationRun:
         """Close a run with its counts.
@@ -119,6 +120,17 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
         """
         if not batch_ids:
             return []
+        stmt = (
+            select(ReconciliationRun.batch_id)
+            .where(ReconciliationRun.batch_id.in_(tuple(batch_ids)))
+            .where(ReconciliationRun.status == "running")
+            .distinct()
+        )
+        return [row[0] for row in (await session.execute(stmt)).all()]
+
+    async def list_recent(
+        self,
+        session: AsyncSession,
         *,
         batch_id: str | None = None,
         limit: int = 20,

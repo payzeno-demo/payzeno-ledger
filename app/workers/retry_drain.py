@@ -62,3 +62,28 @@ class RetryDrainJob(PeriodicJob):
         instead of on the next deploy. That is the whole reason it is a setting and not a
         registration-time decision.
 
+        The cap is a wall-clock budget in disguise: each item makes at least one acquirer
+        call, so 200 items at 300ms is a minute, which is exactly the interval. Setting
+        it higher does not drain faster — ``max_instances=1`` on the scheduler means the
+        next tick is skipped while this one is still running — it only makes the pass
+        take longer to notice a shutdown.
+        """
+        started = time.monotonic()
+
+        if not self._settings.retry_drain_enabled:
+            return JobResult(
+                name=self.name, items_processed=0, duration_ms=0, error=None
+            )
+
+        limit = self._settings.retry_drain_batch_size
+        settled = await self._scheduler.drain(limit=limit)
+
+        metrics.increment("RetryDrainPass", settled=str(settled > 0).lower())
+        metrics.observe("RetryDrainSettled", settled)
+        logger.info(
+            "retry_drain_complete",
+            settled=settled,
+            limit=limit,
+            interval_seconds=self.interval_seconds,
+        )
+        return self._result(started, settled)
