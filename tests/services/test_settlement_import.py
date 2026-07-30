@@ -215,6 +215,17 @@ async def test_import_file_is_a_no_op_for_a_file_already_imported(sessions_facto
 
 
 async def test_import_file_propagates_an_acquirer_outage(sessions_factory) -> None:
+    processor = StubProcessor(raises=ProcessorUnavailableError(code="processor_unavailable"))
+    service, settlements, items = _importer(sessions_factory, processor)
+
+    with pytest.raises(ProcessorUnavailableError):
+        await service.import_file("worldflow", PROCESSING_DATE)
+
+    assert settlements.batches == {}
+    assert items.added == []
+
+
+async def test_import_file_rejects_a_file_with_no_header(sessions_factory) -> None:
     processor = StubProcessor(payload=b"")
     service, _, items = _importer(sessions_factory, processor)
 
@@ -305,6 +316,12 @@ class _InMemoryBatches:
         self.rows[obj.id] = obj
         self.by_file[obj.file_reference] = obj.id
         return obj
+
+    async def find_by_file_reference(
+        self, session: Any, *, acquirer: str, file_reference: str
+    ) -> Any | None:
+        batch_id = self.by_file.get(file_reference)
+        return self.rows.get(batch_id) if batch_id else None
 
     async def get_or_raise(self, session: Any, entity_id: str) -> Any:
         return self.rows[entity_id]

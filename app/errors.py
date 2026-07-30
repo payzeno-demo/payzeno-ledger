@@ -295,6 +295,18 @@ class OrphanedItemError(SettlementError):
     reports itself as unmatched rather than as a missing projection.
     """
 
+    code: ClassVar[str] = "orphaned_item"
+
+
+class RetryableSettlementError(SettlementError):
+    """The acquirer failed in a way that is worth trying again.
+
+    Carries the processor's own ``code`` — both ``ReconciliationService.reconcile_batch``
+    and ``RetryScheduler.retry_item`` catch this **by name** and read ``exc.code`` to pick
+    the item's next status and its backoff, so a bare re-raise of the underlying
+    ``UpstreamError`` loses the only thing the caller needs.
+    """
+
     code: ClassVar[str] = "retryable_settlement"
 
 
@@ -369,6 +381,7 @@ class DualControlRequiredError(PayzenoLedgerError):
     record which one, because dual control is meaningless otherwise.
     """
 
+    code: ClassVar[str] = "permission_denied"
     http_status: ClassVar[int] = 403
 
 
@@ -410,6 +423,16 @@ class ProcessorIndeterminateError(UpstreamError):
     difference is everything: an indeterminate capture may already have charged the
     cardholder, so it routes to ``ProcessorClient.get_capture_status`` instead of being
     re-issued. That split is PAY-2060 and ``INDETERMINATE_ERROR_CODES``.
+    """
+
+    code: ClassVar[str] = "processor_unavailable"
+
+
+class BusPublishError(UpstreamError):
+    """SNS refused a publish. Raised only by ``SnsPublisher``, only from the outbox drain.
+
+    The business path publishes through ``OutboxPublisher`` into the same transaction, so
+    a bus outage can never fail a settlement — it can only make the drain retry.
     """
 
     code: ClassVar[str] = "internal_error"

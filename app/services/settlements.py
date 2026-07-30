@@ -159,6 +159,7 @@ class SettlementService:
         batch = await self.open_batch(
             session,
             acquirer=acquirer,
+            currency=currency,
             processing_date=processing_date,
             file_reference=file_reference,
         )
@@ -194,6 +195,37 @@ class SettlementService:
             "legacy_settlement_import",
             batch_id=batch.id,
             acquirer=acquirer,
+            item_count=len(items),
+        )
+        return batch.id, len(items)
+
+
+class SettlementImportService:
+    """Pulls one acquirer settlement file and turns it into a closed, matched batch.
+
+    Sole caller of ``ProcessorClient.fetch_settlement_file``, of
+    :meth:`SettlementService.open_batch` and of :meth:`SettlementService.close_batch`.
+    Driven by ``SettlementImportJob`` (3600s).
+    """
+
+    def __init__(
+        self,
+        sessions: SessionFactory,
+        processor: ProcessorClient,
+        settlements: SettlementService,
+        items: ReconciliationItemRepository,
+        strategies: list[MatchStrategy],
+        clock: Clock,
+    ) -> None:
+        self._sessions = sessions
+        self._processor = processor
+        self._settlements = settlements
+        self._items = items
+        self._strategies = strategies
+        self._clock = clock
+
+    async def import_file(self, acquirer: str, processing_date: date) -> SettlementBatch:
+        raw = await self._processor.fetch_settlement_file(
             acquirer=acquirer, processing_date=processing_date
         )
         parsed = parser_for(acquirer).parse(raw)
