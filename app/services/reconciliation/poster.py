@@ -107,6 +107,18 @@ class SettlementPoster:
                 f"reconciliation item {item.id} has no matched charge",
                 item_id=item.id,
                 batch_id=item.batch_id,
+                acquirer_reference=item.acquirer_reference,
+            )
+
+        key = ledger_key("settle", item.batch_id, item.id)
+
+        charge = await self._charges.get_or_raise(session, item.charge_id)
+        merchant = await self._merchants.get_or_raise(session, item.merchant_id)
+
+        if abs(item.variance_minor) > merchant.settlement_tolerance_minor:
+            await self._publish_variance(session, item, merchant.settlement_tolerance_minor)
+            raise SettlementVarianceExceededError(
+                f"item {item.id} varies by {item.variance_minor} minor units",
                 item_id=item.id,
                 batch_id=item.batch_id,
                 variance_minor=item.variance_minor,
@@ -341,6 +353,7 @@ class SettlementPoster:
         if code in RETRYABLE_ERROR_CODES:
             logger.warning(
                 "settlement_item_retryable",
+                batch_id=item.batch_id,
                 acquirer=item.acquirer,
                 error_code=code,
             )
