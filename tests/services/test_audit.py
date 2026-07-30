@@ -47,6 +47,15 @@ class DuplicateRow:
     ) -> Totals:
         return self.totals
 
+    async def sample_unbalanced_transactions(
+        self, session: Any, *, currency: str, as_of: datetime, limit: int
+    ) -> list[str]:
+        return self.unbalanced[:limit]
+
+    def __init__(self, duplicates: list[DuplicateRow] | None = None) -> None:
+        self.duplicates = duplicates or []
+        self.calls: list[dict[str, Any]] = []
+
     def __init__(self, rows: list[CacheRow] | None = None) -> None:
         self.rows = rows or []
 
@@ -78,6 +87,36 @@ def _audit(
 async def test_trial_balance_passes_when_debits_equal_credits(sessions_factory) -> None:
     service, publisher = _audit(sessions=sessions_factory)
 
+    result = await service.run_trial_balance(currency="USD")
+
+    assert isinstance(result, TrialBalanceResult)
+    assert result.balanced is True
+    assert result.delta_minor == 0
+    assert publisher.event_types() == []
+
+
+async def test_trial_balance_raises_and_publishes_when_it_does_not(sessions_factory) -> None:
+    service, publisher = _audit(
+        entries=StubEntries(
+            totals=Totals(1_000_000, 999_000), unbalanced=["txn_bad_1", "txn_bad_2"]
+        ),
+        sessions=sessions_factory,
+    )
+
+    with pytest.raises(LedgerIntegrityError):
+        await service.run_trial_balance(currency="USD")
+
+    assert "ledger.imbalance_detected" in publisher.event_types()
+
+
+async def test_a_duplicated_settlement_still_passes_the_trial_balance(
+    sessions_factory,
+) -> None:
+    """The single most-quoted line in docs/postmortems/2041-duplicate-settlement.md.
+
+    Two settle transactions for the same item is 6 legs instead of 3. Debits still equal
+    credits. Every check the ledger had that night was a balance check, and this is why
+    all of them passed while $1.42M of merchant payable was overstated.
     """
     entries = StubEntries(totals=Totals(2_000_000, 2_000_000))
     duplicates = [DuplicateRow("settle:sb_QK:ri_X", 2, "USD", "txn_2")]
@@ -122,6 +161,8 @@ async def test_duplicate_check_publishes_an_imbalance_event(sessions_factory) ->
 
     await service.check_duplicate_settlements()
 
+    transactions = StubTransactions()
+    service, _ = _audit(transactions=transactions, sessions=sessions_factory)
     since = NOW - timedelta(hours=6)
 
     await service.check_duplicate_settlements(since=since)
@@ -149,6 +190,10 @@ async def test_cache_drift_is_reported_per_merchant(sessions_factory) -> None:
     def __init__(self, rows: dict[str, Record] | None = None) -> None:
         self.rows = rows or {}
 
+    async def add(self, session: Any, obj: Any) -> Any:
+        self.rows[obj.id] = obj
+        return obj
+
     async def post(self, session: Any, **kwargs: Any) -> Any:
         self.posts.append(kwargs)
         transaction = type("Txn", (), {"id": "txn_adj_1"})()
@@ -170,6 +215,9 @@ def _adjustments(rows: dict[str, Record] | None = None):
 
 
 async def test_a_second_approver_posts_the_adjustment() -> None:
+    record = Record(requested_by="staff_a")
+    service, _, ledger = _adjustments({record.id: record})
+
     record = Record(requested_by="staff_a", status="posted")
     service, _, ledger = _adjustments({record.id: record})
 
