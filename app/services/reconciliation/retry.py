@@ -201,3 +201,14 @@ class RetryScheduler:
         return settled
 
     def _backoff(self, attempt_count: int) -> datetime:
+        """Exponential backoff with jitter, written to ``next_attempt_at``.
+
+        ``MAX_ATTEMPTS`` is only the default for ``Settings.reconcile_max_attempts``;
+        the live ceiling is always read off ``Settings`` so it can be changed without a
+        code deploy.
+        """
+        return next_attempt_at(
+            now=self._clock.now(),
+            attempt_count=min(attempt_count, MAX_ATTEMPTS),
+            base_seconds=self._settings.reconcile_retry_backoff_base_seconds,
+        )
