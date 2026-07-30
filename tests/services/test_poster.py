@@ -121,6 +121,7 @@ async def test_confirm_settlement_runs_even_for_a_non_sale_line(wired) -> None:
         batch_id="sb_post",
         charge_id="ch_post",
         merchant_id="mer_post",
+        line_type="scheme_fee",
         gross_minor=413,
         fee_minor=413,
         net_minor=0,
@@ -215,6 +216,26 @@ async def test_capture_deferred_only_for_capture_at_settlement_charges(
         batch_id="sb_post",
         charge_id="ch_deferred",
         merchant_id="mer_post",
+        gross_minor=10_000,
+    )
+    await poster.post_settlement(object(), deferred, caller="batch_pass")
+
+    assert len(processor.capture_calls) == 1
+
+
+async def test_the_capture_flag_is_read_off_the_charge_not_the_merchant(
+    wired, merchants, charges
+) -> None:
+    """PAY-1652's eleven travel/lodging merchants, denormalised at authorisation.
+
+    A merchant flipping the flag after authorisation must not decide whether an in-flight
+    charge gets a second cardholder capture.
+    """
+    merchants.seed(
+        make_merchant_projection(merchant_id="mer_post", capture_at_settlement=True)
+    )
+    charges.seed(make_charge_projection(charge_id="ch_nocap", capture_at_settlement=False))
+    line = make_item(
         item_id="ri_nocap", batch_id="sb_post", charge_id="ch_nocap", merchant_id="mer_post"
     )
 
@@ -339,6 +360,7 @@ async def test_line_type_selects_the_rule(wired) -> None:
         line_type="refund",
         gross_minor=4_000,
         net_minor=4_000,
+        fee_minor=0,
     )
     poster, _, _, _ = build(*wired)
 

@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     nordpay_acquirer_account: str = "payzeno-uk-1"
     nordpay_breaker_threshold_pct: int = 50
     nordpay_breaker_window: int = 100
+    nordpay_breaker_reset_seconds: int = 30
+
     # -- reconciliation ------------------------------------------------------------
     reconcile_sweep_interval_seconds: int = 900
     #: Wall-clock budget for one sweep pass, added by PR #171. The guard transaction is
@@ -112,6 +114,10 @@ class Settings(BaseSettings):
     #: overlapped the sweep at all. See docs/postmortems/2041-duplicate-settlement.md.
     retry_drain_enabled: bool = False
 
+    # -- payout rails --------------------------------------------------------------
+    # Four cutoffs because four jurisdictions and four calendars. There is deliberately
+    # no single PAYOUT_CUTOFF_HOUR_UTC any more — it was removed when SEPA landed.
+    payout_cutoff_ach_utc: str = "21:00"
     payout_cutoff_same_day_ach_utc: str = "16:45"
     payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"

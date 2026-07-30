@@ -201,6 +201,7 @@ class Container:
         # THE shared poster. One instance; both reconciliation paths hold it.
         self.settlement_poster = SettlementPoster(
             transactions=repos.transactions,
+            charges=repos.charges,
             merchants=repos.merchants,
             ledger=self.ledger_poster,
             processor=self.processor,
@@ -289,6 +290,7 @@ class Container:
         self.payout_service = PayoutService(
             locks=self.locks,
             payouts=repos.payouts,
+            merchants=repos.merchants,
             banks=repos.banks,
             calculator=self.payout_calculator,
             calendar=self.calendar,
@@ -303,6 +305,10 @@ class Container:
             ledger=self.ledger_poster,
             calendar=self.calendar,
             settings=settings,
+            clock=self.clock,
+        )
+
+        self.funding_service = FundingMatchService(
             sessions=self.sessions,
             fundings=repos.fundings,
             batches=repos.batches,
@@ -343,9 +349,11 @@ class Container:
         self.payment_event_consumer = PaymentEventConsumer(
             sessions=self.sessions,
             processed=repos.processed_events,
+            sqs_client_factory=sqs_factory,
             settings=settings,
             charges=repos.charges,
             transactions=repos.transactions,
+            ledger=self.ledger_poster,
             clock=self.clock,
         )
         self.merchant_event_consumer = MerchantEventConsumer(
@@ -378,6 +386,7 @@ class Container:
         self.batch_close_job = BatchCloseJob(
             sessions=self.sessions,
             batches=repos.batches,
+            settlements=self.settlement_service,
             clock=self.clock,
             settings=settings,
         )
