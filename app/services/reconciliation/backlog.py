@@ -61,7 +61,71 @@ class BacklogService:
                 batch_id=batch_id,
             )
 
+            buckets: list[BacklogBucket] = []
+            for row in rows:
+                buckets.append(
+                    BacklogBucket(
+                        batch_id=row.batch_id,
+                        currency=row.currency,
+                        status=row.status,
+                        item_count=row.item_count,
+                        oldest_next_attempt_at=row.oldest_next_attempt_at,
+                        gross_minor=row.gross_minor or 0,
+                    )
+                )
+
+        now = self._clock.now()
+        stale = sum(1 for bucket in buckets if _is_stale(bucket.oldest_next_attempt_at, now))
+        total_items = sum(bucket.item_count for bucket in buckets)
+        total_gross = sum(bucket.gross_minor for bucket in buckets)
+
+        buckets.sort(key=lambda bucket: (-bucket.item_count, bucket.batch_id))
+
+        logger.info(
+            "reconciliation_backlog_read",
+            batches=len(buckets),
             items=total_items,
+            stale_batches=stale,
+            currency=currency,
+        )
+        return {
+            "total_items": total_items,
+            "total_gross_minor": total_gross,
+            "stale_batches": stale,
+            "as_of": now.isoformat(),
+            "buckets": [
+                {
+                    "batch_id": bucket.batch_id,
+                    "currency": bucket.currency,
+                    "status": bucket.status,
+                    "item_count": bucket.item_count,
+                    "gross_minor": bucket.gross_minor,
+                    "oldest_next_attempt_at": (
+                        bucket.oldest_next_attempt_at.isoformat()
+                        if bucket.oldest_next_attempt_at
+                        else None
+                    ),
+                }
+                for bucket in buckets
+            ],
+        }
+
+    async def batches_with_running_run(self, batch_ids: list[str]) -> set[str]:
+        """Which of these batches currently have a ``running`` reconciliation run.
+
+        Backed by ``pix_reconciliation_run_active``. Nothing on the settlement path
+        calls this yet.
+
+        TODO(PAY-2057): skip items whose batch has a running reconciliation_run instead
+        of discovering it lock by lock. A drain pass loops up to 200 items serially and
+        each one opens a transaction, asks for the batch lock, loses it to the sweep and
+        returns None — 200 wasted round trips to learn a single fact this query answers
+        once. Wiring it means RetryScheduler.drain needs the batch id per candidate,
+        which list_retryable_ids does not return today.
+        """
+        if not batch_ids:
+            return set()
+        async with self._sessions.begin() as session:
             running = await self._runs.list_running_batch_ids(session, batch_ids)
         return set(running)
 

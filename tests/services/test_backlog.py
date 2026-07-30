@@ -29,6 +29,26 @@ pytestmark = pytest.mark.asyncio
 NOW = datetime(2026, 4, 16, 1, 30, tzinfo=UTC)
 
 
+class Row:
+    """What `aggregate_backlog` returns — one row per batch."""
+
+    def __init__(
+        self,
+        batch_id: str,
+        currency: str,
+        status: str,
+        item_count: int,
+        oldest_next_attempt_at: datetime | None,
+        gross_minor: int,
+    ) -> None:
+        self.batch_id = batch_id
+        self.currency = currency
+        self.status = status
+        self.item_count = item_count
+        self.oldest_next_attempt_at = oldest_next_attempt_at
+        self.gross_minor = gross_minor
+
+
 class StubItems:
     def __init__(self, rows: list[Row]) -> None:
         self.rows = rows
@@ -53,6 +73,84 @@ class StubItems:
         return rows
 
 
+class StubRuns:
+    def __init__(self, running: list[str] | None = None) -> None:
+        self.running = running or []
+        self.asked: list[list[str]] = []
+
+    async def list_running_batch_ids(self, session: Any, batch_ids: list[str]) -> list[str]:
+        self.asked.append(list(batch_ids))
+        return [batch_id for batch_id in batch_ids if batch_id in self.running]
+
+
+class StubBatches:
+    pass
+
+
+def _service(rows: list[Row], *, running: list[str] | None = None, sessions=None):
+    items = StubItems(rows)
+    runs = StubRuns(running)
+    service = BacklogService(
+        sessions=sessions,
+        items=items,
+        batches=StubBatches(),
+        runs=runs,
+        clock=FrozenClock(NOW),
+    )
+    return service, items, runs
+
+
+def _incident_rows() -> list[Row]:
+    """The two batches from the night of PAY-2041, at their peak."""
+    return [
+        Row("sb_QK", "USD", "partially_reconciled", 2_704, NOW - timedelta(hours=1), 27_040_000),
+        Row("sb_7T", "GBP", "partially_reconciled", 1_409, NOW - timedelta(minutes=50), 14_090_000),
+        Row("sb_calm", "USD", "closed", 3, NOW - timedelta(seconds=30), 30_000),
+    ]
+
+
+async def test_backlog_totals_every_bucket(sessions_factory) -> None:
+    service, _, _ = _service(_incident_rows(), sessions=sessions_factory)
+
+    backlog = await service.get_backlog()
+
+    assert backlog["total_items"] == 2_704 + 1_409 + 3
+    assert backlog["total_gross_minor"] == 27_040_000 + 14_090_000 + 30_000
+    assert len(backlog["buckets"]) == 3
+
+
+async def test_backlog_sorts_the_biggest_batch_first(sessions_factory) -> None:
+    """On-call reads the first line and stops. It had better be the worst one."""
+    service, _, _ = _service(_incident_rows(), sessions=sessions_factory)
+
+    backlog = await service.get_backlog()
+
+    assert [bucket["batch_id"] for bucket in backlog["buckets"]] == [
+        "sb_QK",
+        "sb_7T",
+        "sb_calm",
+    ]
+
+
+async def test_backlog_counts_stale_batches(sessions_factory) -> None:
+    service, _, _ = _service(_incident_rows(), sessions=sessions_factory)
+
+    backlog = await service.get_backlog()
+
+    # Two batches older than the sweep interval; the third is 30 seconds old.
+    assert backlog["stale_batches"] == 2
+    assert STALE_AFTER_SECONDS == 900
+
+
+async def test_backlog_only_looks_at_retryable_statuses(sessions_factory) -> None:
+    """The same constant the sweep and the drain import. One definition of eligible."""
+    service, items, _ = _service(_incident_rows(), sessions=sessions_factory)
+
+    await service.get_backlog()
+
+    assert items.calls[0]["statuses"] == RETRYABLE_STATUSES
+
+
 async def test_backlog_filters_by_currency(sessions_factory) -> None:
     service, _, _ = _service(_incident_rows(), sessions=sessions_factory)
 
@@ -68,6 +166,22 @@ async def test_backlog_filters_by_batch(sessions_factory) -> None:
     backlog = await service.get_backlog(batch_id="sb_QK")
 
     assert backlog["total_items"] == 2_704
+
+
+async def test_backlog_of_an_idle_ledger_is_empty_not_missing(sessions_factory) -> None:
+    """An empty backlog is a valid answer with a shape, not a 404.
+
+    The console renders the same table either way and a null here becomes a blank panel
+    that looks like a failed request.
+    """
+    service, _, _ = _service([], sessions=sessions_factory)
+
+    backlog = await service.get_backlog()
+
+    assert backlog["total_items"] == 0
+    assert backlog["stale_batches"] == 0
+    assert backlog["buckets"] == []
+    assert backlog["as_of"] == NOW.isoformat()
 
 
 async def test_backlog_never_writes_and_never_locks(sessions_factory) -> None:
@@ -88,6 +202,27 @@ async def test_backlog_never_writes_and_never_locks(sessions_factory) -> None:
 # --------------------------------------------------------------------------------------
 # PAY-2057 — the finished half
 # --------------------------------------------------------------------------------------
+
+
+async def test_batches_with_running_run_reports_the_blocked_batches(sessions_factory) -> None:
+    service, _, runs = _service(
+        _incident_rows(), running=["sb_QK"], sessions=sessions_factory
+    )
+
+    blocked = await service.batches_with_running_run(["sb_QK", "sb_7T", "sb_calm"])
+
+    assert blocked == {"sb_QK"}
+    assert runs.asked == [["sb_QK", "sb_7T", "sb_calm"]]
+
+
+async def test_batches_with_running_run_short_circuits_on_an_empty_list(
+    sessions_factory,
+) -> None:
+    """No candidates, no query. The drain calls this once per pass."""
+    service, _, runs = _service([], sessions=sessions_factory)
+
+    assert await service.batches_with_running_run([]) == set()
+    assert runs.asked == []
 
 
 async def test_nothing_on_the_settlement_path_calls_it_yet(sessions_factory) -> None:

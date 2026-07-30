@@ -158,3 +158,46 @@ class RetryScheduler:
         RETRYABLE_STATUSES`` predicate below excludes it. It depends on ``READ COMMITTED``:
         nothing in this service sets ``isolation_level``, and under ``REPEATABLE READ`` the
         snapshot would be taken at this very ``SELECT``, the re-read would still see
+        ``retryable``, and the fix would look correct and not work.
+        """
+        batch_id = await self._items.get_batch_id(session, item_id)
+        if batch_id is None:
+            return None
+
+        # NON-BLOCKING on purpose. A sweep can hold the batch lock for minutes across
+        # 5,000 items; pg_advisory_xact_lock would park this drain worker on a pooled
+        # connection for the whole pass, and 200 of those exhausts DATABASE_POOL_SIZE.
+        # Failing fast leaves the item retryable for the next drain, which is exactly what
+        # we want — the sweep is settling it anyway. The cost is the convoy mregression
+        # raised on #171 at 02:52: during a sweep, every attempt in a drain pass fails and
+        # throughput for that batch is zero. PAY-2057 is the fix and it is not done.
+        if not await self._locks.try_acquire_batch_lock(session, batch_id):
+            return None
+
+        stmt = (
+            select(ReconciliationItem)
+            .where(ReconciliationItem.id == item_id)
+            .where(ReconciliationItem.status.in_(RETRYABLE_STATUSES))
+            .with_for_update(skip_locked=True)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def drain(self, *, limit: int) -> int:
+        """Work through the retryable backlog, oldest ``next_attempt_at`` first.
+
+        Serial on purpose: the whole point of the backoff column is to stop hammering a
+        degraded acquirer, and firing ``limit`` retries concurrently would undo it.
+        """
+        async with self._sessions.begin() as session:
+            item_ids = await self._items.list_retryable_ids(session, limit=limit)
+        settled = 0
+        for item_id in item_ids:
+            if await self.retry_item(item_id, requested_by="retry_drain") is not None:
+                settled += 1
+        logger.info(
+            "retry_drain_pass", candidates=len(item_ids), settled=settled, limit=limit
+        )
+        return settled
+
+    def _backoff(self, attempt_count: int) -> datetime:
