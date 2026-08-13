@@ -191,6 +191,7 @@ class RetryScheduler:
         """
         async with self._sessions.begin() as session:
             item_ids = await self._items.list_retryable_ids(session, limit=limit)
+            item_ids = await self._items.exclude_sweeping_batches(session, item_ids)
         settled = 0
         for item_id in item_ids:
             if await self.retry_item(item_id, requested_by="retry_drain") is not None:
