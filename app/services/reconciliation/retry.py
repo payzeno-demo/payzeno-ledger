@@ -6,6 +6,7 @@ minutes for the next batch sweep. Two entry points share this class: the interna
 reaches through payzeno-api, and ``RetryDrainJob``, which drains the retryable backlog
 every sixty seconds.
 """
+# retrigger: agent-runner rollout live-fire verification (1be7ac2b)
 
 from __future__ import annotations
 
