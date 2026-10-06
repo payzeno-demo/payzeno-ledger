@@ -1,0 +1,1 @@
+bonez-acceptance check — acceptance checkpoint verified.
