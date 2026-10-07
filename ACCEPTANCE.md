@@ -1,0 +1,1 @@
+This repository has passed the bonez acceptance check.
