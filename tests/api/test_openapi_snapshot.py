@@ -56,6 +56,8 @@ EXPECTED_PATHS = {
     "/internal/v1/ops/adjustments",
     "/internal/v1/ops/adjustments/{request_id}/approve",
     "/internal/v1/ops/items/{item_id}/match",
+    # RFC platform-v2 §10 — one tick of a periodic job, after a simulated clock advance.
+    "/internal/v1/ops/jobs/{name}/run",
     "/healthz",
     "/readyz",
 }

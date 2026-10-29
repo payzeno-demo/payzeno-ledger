@@ -44,6 +44,8 @@ from app.api.schemas import (
     SettlementBatch,
     SettlementImportRequest,
     SettlementImportResponse,
+    contract_page,
+    contract_payload,
 )
 from app.logging import get_logger
 from app.ports import SessionFactory
@@ -65,25 +67,26 @@ ReposDep = Annotated[Any, Depends(get_repositories)]
 
 
 def _serialise_batch(batch: Any) -> dict[str, Any]:
-    """ORM row → the ``SettlementBatch`` shape."""
-    return {
-        "id": batch.id,
-        "object": "settlement_batch",
-        "acquirer": batch.acquirer,
-        "currency": batch.currency,
-        "processing_date": batch.processing_date,
-        "file_reference": batch.file_reference,
-        "status": batch.status,
-        "livemode": batch.livemode,
-        "item_count": batch.item_count,
-        "gross_minor": batch.gross_minor,
-        "fee_minor": batch.fee_minor,
-        "net_minor": batch.net_minor,
-        "funded_minor": batch.funded_minor,
-        "funded_at": batch.funded_at,
-        "reconciled_at": batch.reconciled_at,
-        "created_at": batch.created_at,
-    }
+    """ORM row → exactly the ``SettlementBatch`` contract."""
+    return contract_payload(
+        SettlementBatch,
+        {
+            "id": batch.id,
+            "object": "settlement_batch",
+            "acquirer": batch.acquirer,
+            "currency": batch.currency,
+            "processing_date": batch.processing_date,
+            "file_reference": batch.file_reference,
+            "status": batch.status,
+            "item_count": batch.item_count,
+            "expected_total_minor": batch.expected_total_minor,
+            "posted_total_minor": batch.posted_total_minor,
+            "opened_at": batch.opened_at,
+            "closed_at": batch.closed_at,
+            "funded_at": batch.funded_at,
+            "reconciled_at": batch.reconciled_at,
+        },
+    )
 
 
 @router.get(
@@ -112,12 +115,12 @@ async def list_batches(
             status=status_filter,
             acquirer=acquirer,
         )
-        return {
-            "object": "list",
-            "data": [_serialise_batch(row) for row in page.items],
-            "has_more": page.has_more,
-            "next_cursor": page.next_cursor,
-        }
+        return contract_page(
+            SettlementBatch,
+            [_serialise_batch(row) for row in page.items],
+            has_more=page.has_more,
+            next_cursor=page.next_cursor,
+        )
 
 
 @router.get(
@@ -231,12 +234,12 @@ async def list_items(
             status=status_filter,
             line_type=line_type,
         )
-        return {
-            "object": "list",
-            "data": [_serialise_item(row) for row in page.items],
-            "has_more": page.has_more,
-            "next_cursor": page.next_cursor,
-        }
+        return contract_page(
+            ReconciliationItem,
+            [_serialise_item(row) for row in page.items],
+            has_more=page.has_more,
+            next_cursor=page.next_cursor,
+        )
 
 
 @router.post(

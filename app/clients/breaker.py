@@ -233,12 +233,14 @@ class BreakerProcessorClient(ProcessorClient):
             ),
         )
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
         client = self._client_for(acquirer)
         return await self._breaker.call(
             f"{acquirer}:fetch_settlement_file",
             lambda: client.fetch_settlement_file(
-                acquirer=acquirer, processing_date=processing_date
+                acquirer=acquirer, processing_date=processing_date, currency=currency
             ),
         )
 

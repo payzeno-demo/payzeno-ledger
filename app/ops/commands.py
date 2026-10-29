@@ -69,7 +69,9 @@ async def cmd_backlog(
     """
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
-        buckets = await items.aggregate_backlog(session, currency=currency)
+        buckets = await items.aggregate_backlog(
+            session, statuses=RETRYABLE_STATUSES, currency=currency
+        )
 
     print_table(
         ("batch_id", "currency", "status", "items", "oldest_next_attempt_at", "gross_minor"),
@@ -142,18 +144,14 @@ async def cmd_find_duplicates(
     since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     transactions = LedgerTransactionRepository()
     async with sessions.begin() as session:
-        rows = await transactions.list_duplicate_idempotency_keys(session, since=since)
+        rows = await transactions.list_duplicate_idempotency_keys(
+            session, purpose="settle", since=since
+        )
 
     print_table(
-        ("idempotency_key", "count", "transaction_ids", "merchant_id", "amount_minor"),
+        ("idempotency_key", "count", "currency", "sample_transaction_id"),
         [
-            (
-                row.idempotency_key,
-                row.count,
-                ",".join(row.transaction_ids),
-                row.merchant_id,
-                row.amount_minor,
-            )
+            (row.idempotency_key, row.count, row.currency, row.sample_transaction_id)
             for row in rows
         ],
     )
@@ -168,7 +166,7 @@ async def cmd_show_batch(
     items = ReconciliationItemRepository()
     async with sessions.begin() as session:
         batch = await batches.get_or_raise(session, batch_id)
-        totals = await items.totals_for_batch(session, batch_id)
+        counts = await items.count_by_status(session, batch_id=batch_id)
 
     print_table(
         ("field", "value"),
@@ -180,16 +178,16 @@ async def cmd_show_batch(
             ("file_reference", batch.file_reference),
             ("status", batch.status),
             ("item_count", batch.item_count),
-            ("gross_minor", batch.gross_minor),
-            ("net_minor", batch.net_minor),
-            ("funded_minor", batch.funded_minor),
+            ("expected_total_minor", batch.expected_total_minor),
+            ("posted_total_minor", batch.posted_total_minor),
+            ("funded_amount_minor", batch.funded_amount_minor),
             ("funded_at", batch.funded_at),
             ("reconciled_at", batch.reconciled_at),
         ],
     )
     print()
     print_table(
-        ("status", "items"), [(status, count) for status, count in sorted(totals.items())]
+        ("status", "items"), [(status, count) for status, count in sorted(counts.items())]
     )
 
 
@@ -201,7 +199,7 @@ async def cmd_outbox(sessions: SingleConnectionSessionFactory, limit: int = 20) 
     print_table(
         ("id", "event_type", "attempts", "created_at", "last_error"),
         [
-            (row.id, row.event_type, row.publish_attempts, row.created_at, row.last_error)
+            (row.id, row.type, row.attempt_count, row.created_at, row.last_error)
             for row in pending
         ],
     )
@@ -241,9 +239,16 @@ async def cmd_stale_open_batches(
         stale = [b for b in open_batches if b.processing_date <= cutoff]
 
     print_table(
-        ("id", "acquirer", "currency", "processing_date", "item_count", "gross_minor"),
+        ("id", "acquirer", "currency", "processing_date", "item_count", "expected_total_minor"),
         [
-            (b.id, b.acquirer, b.currency, b.processing_date, b.item_count, b.gross_minor)
+            (
+                b.id,
+                b.acquirer,
+                b.currency,
+                b.processing_date,
+                b.item_count,
+                b.expected_total_minor,
+            )
             for b in stale
         ],
     )

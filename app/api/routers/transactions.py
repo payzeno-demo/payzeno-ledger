@@ -30,10 +30,13 @@ from app.api.deps import (
 from app.api.schemas import (
     BulkPostTransactionRequest,
     BulkPostTransactionResponse,
+    LedgerEntry,
     LedgerTransaction,
     Paginated,
     PostTransactionRequest,
     ReverseTransactionRequest,
+    contract_page,
+    contract_payload,
 )
 from app.domain.idempotency import fingerprint_of
 from app.domain.postings import PostingLine
@@ -72,38 +75,43 @@ def _to_lines(req: PostTransactionRequest) -> list[PostingLine]:
     ]
 
 
-def _serialise(transaction: Any, entries: list[Any] | None = None) -> dict[str, Any]:
-    """ORM row → the ``LedgerTransaction`` shape, entries included."""
-    rows = entries if entries is not None else list(getattr(transaction, "entries", []))
-    return {
-        "id": transaction.id,
-        "object": "ledger_transaction",
-        "idempotency_key": transaction.idempotency_key,
-        "request_fingerprint": transaction.request_fingerprint,
-        "purpose": transaction.purpose,
-        "merchant_id": transaction.merchant_id,
-        "currency": transaction.currency,
-        "livemode": transaction.livemode,
-        "reference_type": transaction.reference_type,
-        "reference_id": transaction.reference_id,
-        "reverses_transaction_id": transaction.reverses_transaction_id,
-        "created_by": transaction.created_by,
-        "posted_at": transaction.posted_at,
-        "entries": [
-            {
-                "id": entry.id,
-                "object": "ledger_entry",
-                "transaction_id": entry.transaction_id,
-                "account_id": entry.account_id,
-                "direction": entry.direction,
-                "amount_minor": entry.amount_minor,
-                "currency": entry.currency,
-                "sequence": entry.sequence,
-                "created_at": entry.created_at,
-            }
-            for entry in rows
-        ],
-    }
+def _serialise(transaction: Any, entries: list[Any]) -> dict[str, Any]:
+    """ORM row and its legs → exactly the ``LedgerTransaction`` contract."""
+    return contract_payload(
+        LedgerTransaction,
+        {
+            "id": transaction.id,
+            "object": "ledger_transaction",
+            "idempotency_key": transaction.idempotency_key,
+            "request_fingerprint": transaction.request_fingerprint,
+            "purpose": transaction.purpose,
+            "merchant_id": transaction.merchant_id,
+            "currency": transaction.currency,
+            "livemode": transaction.livemode,
+            "reference_type": transaction.reference_type,
+            "reference_id": transaction.reference_id,
+            "reverses_transaction_id": transaction.reverses_transaction_id,
+            "created_by": transaction.created_by,
+            "posted_at": transaction.posted_at,
+            "entries": [
+                contract_payload(
+                    LedgerEntry,
+                    {
+                        "id": entry.id,
+                        "object": "ledger_entry",
+                        "transaction_id": entry.transaction_id,
+                        "account_id": entry.account_id,
+                        "direction": entry.direction,
+                        "amount_minor": entry.amount_minor,
+                        "currency": entry.currency,
+                        "sequence": entry.sequence,
+                        "created_at": entry.created_at,
+                    },
+                )
+                for entry in entries
+            ],
+        },
+    )
 
 
 @router.post(
@@ -117,6 +125,7 @@ async def post_transaction(
     response: Response,
     sessions: SessionsDep,
     poster: PosterDep,
+    repositories: ReposDep,
     caller: InternalCaller,
 ) -> dict[str, Any]:
     """Idempotent on ``idempotency_key``.
@@ -142,7 +151,10 @@ async def post_transaction(
             request_fingerprint=fingerprint_of(body),
             on_conflict="raise",
         )
-        payload = _serialise(result.transaction)
+        entries = await repositories.ledger_entries.list_for_transaction(
+            session, result.transaction.id
+        )
+        payload = _serialise(result.transaction, entries)
 
     if not result.created:
         response.status_code = status.HTTP_200_OK
@@ -183,12 +195,15 @@ async def list_transactions(
             reference_id=reference_id,
             purpose=purpose,
         )
-        return {
-            "object": "list",
-            "data": [_serialise(row) for row in page.items],
-            "has_more": page.has_more,
-            "next_cursor": page.next_cursor,
-        }
+        entries = await repositories.ledger_entries.list_for_transactions(
+            session, [row.id for row in page.items]
+        )
+        return contract_page(
+            LedgerTransaction,
+            [_serialise(row, entries[row.id]) for row in page.items],
+            has_more=page.has_more,
+            next_cursor=page.next_cursor,
+        )
 
 
 @router.get(
@@ -249,7 +264,10 @@ async def reverse_transaction(
             idempotency_key=body.idempotency_key,
             created_by="admin",
         )
-        payload = _serialise(result.transaction)
+        entries = await repositories.ledger_entries.list_for_transaction(
+            session, result.transaction.id
+        )
+        payload = _serialise(result.transaction, entries)
 
     logger.warning(
         "transaction_reversed",

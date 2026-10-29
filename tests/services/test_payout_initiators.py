@@ -91,7 +91,7 @@ def _bank(*, status: str = "verified", country: str = "US", currency: str = "USD
 
 
 ALL_INITIATORS = [
-    (AchPayoutInitiator, "ach", "USD", "US"),
+    (AchPayoutInitiator, "standard_ach", "USD", "US"),
     (SameDayAchPayoutInitiator, "same_day_ach", "USD", "US"),
     (SepaPayoutInitiator, "sepa", "EUR", "DE"),
     (FasterPaymentsPayoutInitiator, "faster_payments", "GBP", "GB"),

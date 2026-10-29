@@ -30,11 +30,17 @@ class MatchOutcome:
 
     ``confident`` is False for the heuristic strategy: an amount-window match produces
     ``needs_review`` and never settles on its own.
+
+    ``merchant_id`` and ``expected_gross_minor`` are copied off the matched
+    ``settlement_charge`` — the charge's owner and its authorised amount — because the
+    acquirer line carries neither and ``SettlementPoster`` needs both.
     """
 
     charge_id: str | None
     method: str
     confident: bool
+    merchant_id: str | None = None
+    expected_gross_minor: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

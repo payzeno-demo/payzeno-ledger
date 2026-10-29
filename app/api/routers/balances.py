@@ -22,7 +22,12 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path, Query
 
 from app.api.deps import get_balance_service, require_internal_service
-from app.api.schemas import Balance, BalanceHistoryResponse
+from app.api.schemas import (
+    Balance,
+    BalanceHistoryResponse,
+    BalanceListResponse,
+    contract_payload,
+)
 from app.errors import ValidationError
 from app.logging import get_logger
 from app.services.balances import BalanceService
@@ -49,13 +54,13 @@ _MAX_HISTORY_DAYS = 400
 
 @router.get(
     "/{merchant_id}",
-    response_model=Balance,
-    summary="Current or point-in-time balance for one merchant and currency",
+    response_model=Balance | BalanceListResponse,
+    summary="Balance for one merchant: one currency, or every currency it holds",
 )
 async def get_balance(
     balances: BalanceServiceDep,
     merchant_id: Annotated[str, Path(min_length=8)],
-    currency: Annotated[str, Query(min_length=3, max_length=3)],
+    currency: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
     as_of: Annotated[datetime | None, Query()] = None,
     livemode: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
@@ -63,13 +68,25 @@ async def get_balance(
 
     Supplying it forces a replay over ``ledger_entry`` and is materially slower — the
     dashboard never does, statement generation always does.
+
+    With ``currency`` the answer is one ``Balance``, as it always was. Without it
+    (RFC platform-v2 §7) it is ``{"data": [Balance, ...]}`` — one per currency the
+    merchant has had a posting in, ordered by currency code, empty for a merchant with
+    none. Balances are never converted or summed across currencies here.
     """
-    return await balances.get_balance(
+    if currency is None:
+        listed = await balances.list_balances(
+            merchant_id=merchant_id, livemode=livemode, as_of=as_of
+        )
+        return {"data": [contract_payload(Balance, row) for row in listed]}
+
+    balance = await balances.get_balance(
         merchant_id=merchant_id,
         currency=currency.upper(),
         livemode=livemode,
         as_of=as_of,
     )
+    return contract_payload(Balance, balance)
 
 
 @router.get(
@@ -114,7 +131,7 @@ async def get_balance_history(
         interval=interval,
         span_days=span_days,
     )
-    return await balances.get_balance_history(
+    history = await balances.get_balance_history(
         merchant_id=merchant_id,
         currency=currency.upper(),
         livemode=livemode,
@@ -122,3 +139,4 @@ async def get_balance_history(
         to=to,
         interval=interval,
     )
+    return contract_payload(BalanceHistoryResponse, history)

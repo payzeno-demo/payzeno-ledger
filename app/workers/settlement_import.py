@@ -13,16 +13,28 @@ when they are ready, and the re-import of a corrected file lands on the existing
 The Java service's push at ``POST /internal/v1/settlement-imports`` is a *different*
 path with a different service method (``SettlementService.import_legacy_records``). The
 two duplicate about forty lines of matching. See ``docs/adr/0007-strangle-billing-legacy.md``.
+
+**Per currency (RFC platform-v2 §7).** Each acquirer is asked for every supported currency
+for every date in the window — ``?date=&currency=`` — and each non-empty answer is its own
+batch. A ``404 file_not_ready`` for one currency or one date is "not yet" for that file
+only: the walk carries on to the next currency and the next date. Only the acquirer being
+down (5xx, timeouts, an open circuit) stops the walk for that acquirer.
+
+**Simulated time (RFC §10).** The window is normally the last :data:`LOOKBACK_DAYS` days, but
+it reaches back to the newest batch this acquirer already has when that is further, up to
+:data:`MAX_CATCHUP_DAYS`. A clock that jumps forward a week then imports the week rather than
+the last three days of it.
 """
 
 from __future__ import annotations
 
 import time
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import ClassVar, Final
 
 from app.config import Settings
-from app.errors import PayzenoLedgerError, UpstreamError
+from app.domain.money import SUPPORTED_CURRENCIES
+from app.errors import PayzenoLedgerError, SettlementFileNotReadyError, UpstreamError
 from app.logging import get_logger
 from app.metrics import metrics
 from app.ports import Clock
@@ -47,6 +59,14 @@ ACQUIRERS: Final[tuple[str, ...]] = ("worldflow", "nordpay")
 #: acquirer round trip per day per acquirer for nothing.
 LOOKBACK_DAYS: Final[int] = 3
 
+#: The furthest back a catch-up walk goes after the clock has moved forward. Production
+#: never needs it — there is a batch every day — and a month is the longest simulated jump
+#: the world makes (RFC platform-v2 §10: "a month of renewals ... in minutes").
+MAX_CATCHUP_DAYS: Final[int] = 31
+
+#: Every currency Payzeno settles, asked for one at a time. Order is cosmetic.
+SETTLEMENT_CURRENCIES: Final[tuple[str, ...]] = tuple(sorted(SUPPORTED_CURRENCIES))
+
 
 class SettlementImportJob(PeriodicJob):
     """Fetch, parse and open a settlement batch per acquirer per processing date."""
@@ -70,57 +90,95 @@ class SettlementImportJob(PeriodicJob):
         return INTERVAL_SECONDS
 
     async def run_once(self) -> JobResult:
-        """Walk the lookback window for each acquirer.
+        """Walk the window for each acquirer, oldest date first, every currency per date.
 
         An upstream failure on one acquirer does not stop the other: they are independent
         vendors and Nordpay being down is not a reason to skip Worldflow's file. An
-        already-imported date is a no-op — ``open_batch`` upserts on the file reference.
+        already-imported file is a no-op that does not even reach the acquirer.
         """
         started = time.monotonic()
-        today = self._clock.now().date()
+        if not self._settings.settlement_import_enabled:
+            # Switched off: unscheduled, and a tick asked for by name does nothing either.
+            return self._result(started, 0)
+        now = self._clock.now()
+        today = now.date()
         imported = 0
 
         for acquirer in ACQUIRERS:
-            for offset in range(1, LOOKBACK_DAYS + 1):
-                processing_date = today - timedelta(days=offset)
-                try:
-                    batch = await self._importer.import_file(acquirer, processing_date)
-                except UpstreamError as exc:
-                    # The file is not there yet, or the acquirer is degraded. Either way
-                    # the next tick is in an hour and there is nothing to escalate.
-                    logger.info(
-                        "settlement_file_unavailable",
-                        acquirer=acquirer,
-                        processing_date=processing_date.isoformat(),
-                        code=exc.code,
-                    )
-                    metrics.increment(
-                        "SettlementImportSkipped", acquirer=acquirer, reason=exc.code
-                    )
-                    break
-                except PayzenoLedgerError as exc:
-                    # A parse or matching failure on one date. Log it and carry on to the
-                    # next — a malformed file for one day must not block the day after.
-                    logger.error(
-                        "settlement_import_failed",
-                        acquirer=acquirer,
-                        processing_date=processing_date.isoformat(),
-                        code=exc.code,
-                    )
-                    metrics.increment(
-                        "SettlementImportFailed", acquirer=acquirer, code=exc.code
-                    )
-                    continue
-
-                imported += 1
+            oldest = await self._oldest_offset(acquirer, today)
+            try:
+                for offset in range(oldest, 0, -1):
+                    processing_date = today - timedelta(days=offset)
+                    for currency in SETTLEMENT_CURRENCIES:
+                        if await self._import_one(acquirer, processing_date, currency, now):
+                            imported += 1
+            except UpstreamError as exc:
+                # The acquirer is degraded or unreachable. The next tick is in an hour and
+                # there is nothing to escalate; Nordpay's walk still runs below.
                 logger.info(
-                    "settlement_file_imported",
+                    "settlement_acquirer_unavailable",
                     acquirer=acquirer,
-                    processing_date=processing_date.isoformat(),
-                    batch_id=batch.id,
-                    item_count=batch.item_count,
-                    gross_minor=batch.gross_minor,
+                    code=exc.code,
                 )
-                metrics.increment("SettlementImported", acquirer=acquirer)
+                metrics.increment("SettlementImportSkipped", acquirer=acquirer, reason=exc.code)
 
         return self._result(started, imported)
+
+    async def _oldest_offset(self, acquirer: str, today: date) -> int:
+        """How many days back this pass starts: the lookback, or the catch-up gap."""
+        latest = await self._importer.latest_processing_date(acquirer)
+        if latest is None:
+            return LOOKBACK_DAYS
+        gap = (today - latest).days
+        return min(MAX_CATCHUP_DAYS, max(LOOKBACK_DAYS, gap))
+
+    async def _import_one(
+        self, acquirer: str, processing_date: date, currency: str, now: datetime
+    ) -> bool:
+        """Import one (acquirer, date, currency) file. True when it was imported just now.
+
+        ``UpstreamError`` propagates — it means the acquirer, not the file — and everything
+        else is logged here so the walk goes on.
+        """
+        try:
+            batch = await self._importer.import_file(acquirer, processing_date, currency)
+        except SettlementFileNotReadyError:
+            logger.info(
+                "settlement_file_not_ready",
+                acquirer=acquirer,
+                processing_date=processing_date.isoformat(),
+                currency=currency,
+            )
+            metrics.increment(
+                "SettlementImportSkipped", acquirer=acquirer, reason="file_not_ready"
+            )
+            return False
+        except UpstreamError:
+            raise
+        except PayzenoLedgerError as exc:
+            # A parse or matching failure on one file. Log it and carry on — a malformed
+            # file for one day or currency must not block the next.
+            logger.error(
+                "settlement_import_failed",
+                acquirer=acquirer,
+                processing_date=processing_date.isoformat(),
+                currency=currency,
+                code=exc.code,
+            )
+            metrics.increment("SettlementImportFailed", acquirer=acquirer, code=exc.code)
+            return False
+
+        if batch is None or batch.closed_at is None or batch.closed_at < now:
+            # Empty for this currency, or imported on an earlier tick.
+            return False
+        logger.info(
+            "settlement_file_imported",
+            acquirer=acquirer,
+            processing_date=processing_date.isoformat(),
+            currency=currency,
+            batch_id=batch.id,
+            item_count=batch.item_count,
+            expected_total_minor=batch.expected_total_minor,
+        )
+        metrics.increment("SettlementImported", acquirer=acquirer)
+        return True

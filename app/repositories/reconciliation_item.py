@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ReconciliationItemNotFoundError
 from app.models.reconciliation_item import ReconciliationItem
+from app.models.settlement_batch import SettlementBatch
 from app.repositories.base import BaseRepository
 
 
@@ -150,6 +151,55 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         """
         stmt = select(ReconciliationItem.batch_id).where(ReconciliationItem.id == item_id)
         return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def acquirer_references_for_batch(
+        self, session: AsyncSession, batch_id: str
+    ) -> set[str]:
+        """The acquirer references a batch already holds.
+
+        What makes re-importing a file idempotent: the importer skips any line whose
+        reference is here instead of tripping ``uq_reconciliation_item_acquirer_ref``.
+        Served by that same index.
+        """
+        stmt = select(ReconciliationItem.acquirer_reference).where(
+            ReconciliationItem.batch_id == batch_id
+        )
+        return set((await session.execute(stmt)).scalars().all())
+
+    async def acquirer_references_already_filed(
+        self,
+        session: AsyncSession,
+        *,
+        acquirer: str,
+        currency: str,
+        around: dt.date,
+        window_days: int,
+        references: list[str],
+    ) -> set[str]:
+        """Which of ``references`` some *other* file from this acquirer already carried.
+
+        :meth:`acquirer_references_for_batch` makes re-importing one file idempotent. This
+        covers the line that turns up in a second file — a day's per-currency file
+        overlapping a mixed file imported before the acquirer split them, or a line the
+        acquirer re-files under the next day — which would otherwise become a second item,
+        a second ``settle`` posting under a different batch's key, and PAY-2041 again.
+
+        Bounded to batches within ``window_days`` of ``around`` so it rides
+        ``ix_settlement_batch_currency_date`` and the per-batch reference index instead of
+        scanning every item the acquirer ever sent.
+        """
+        if not references:
+            return set()
+        stmt = (
+            select(ReconciliationItem.acquirer_reference)
+            .join(SettlementBatch, SettlementBatch.id == ReconciliationItem.batch_id)
+            .where(SettlementBatch.acquirer == acquirer)
+            .where(SettlementBatch.currency == currency)
+            .where(SettlementBatch.processing_date >= around - dt.timedelta(days=window_days))
+            .where(SettlementBatch.processing_date <= around + dt.timedelta(days=window_days))
+            .where(ReconciliationItem.acquirer_reference.in_(references))
+        )
+        return set((await session.execute(stmt)).scalars().all())
 
     async def mark_settled(
         self,

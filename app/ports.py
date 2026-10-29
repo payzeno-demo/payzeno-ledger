@@ -13,7 +13,12 @@ Protocol             Production                          Second implementation
 ``FeatureFlags``     ``EnvFeatureFlags``                 ``StaticFeatureFlags``
 ``SessionFactory``   ``PooledSessionFactory``            ``SingleConnectionSessionFactory``
 ``CircuitBreaker``   ``RedisCircuitBreaker``             ``InMemoryCircuitBreaker``
+``FxRateProvider``   ``HttpFxRateProvider``              ``StaticFxRateProvider`` (tests)
 ===================  =================================  ==================================
+
+The seventh, ``FxRateProvider``, arrived with RFC platform-v2 §7: payouts convert when the
+bank account's currency differs from the balance's, and the rate comes from a vendor in
+production and from sim-world's simulated feed locally — the same URL shape either way.
 
 Concretes declare the protocol as an explicit base — ``class WorldflowClient(ProcessorClient)``
 — even though structural typing would not require it. The explicit base is what makes the
@@ -25,9 +30,10 @@ Layering: L-1. Imports nothing from ``app/``.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, AsyncContextManager, Literal, Protocol, TypeVar, runtime_checkable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +45,8 @@ __all__ = [
     "Clock",
     "EventPublisher",
     "FeatureFlags",
+    "FxRateProvider",
+    "FxRates",
     "InitiationResult",
     "ProcessorClient",
     "SessionFactory",
@@ -94,6 +102,20 @@ class InitiationResult:
     submitted_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class FxRates:
+    """One snapshot of the FX provider's rates against a base currency.
+
+    ``rates[c]`` is units of ``c`` per one ``base`` (so ``rates[base] == 1``), as an exact
+    ``Decimal`` parsed from the provider's decimal strings. ``as_of`` is the provider's own
+    timestamp, not when we fetched it.
+    """
+
+    base: str
+    as_of: datetime
+    rates: Mapping[str, Decimal]
+
+
 # ---------------------------------------------------------------------------------------
 # Protocols
 # ---------------------------------------------------------------------------------------
@@ -143,8 +165,15 @@ class ProcessorClient(Protocol):
         """
         ...
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
-        """Pull one day's raw settlement file. CSV for Worldflow, fixed-width for Nordpay."""
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
+        """Pull one day's raw settlement file. CSV for Worldflow, fixed-width for Nordpay.
+
+        ``currency`` asks for that currency's file only (RFC platform-v2 §7: one file, and
+        one batch, per acquirer, date and currency). A file that is not published yet is
+        :class:`~app.errors.SettlementFileNotReadyError`, which is an answer, not a fault.
+        """
         ...
 
 
@@ -187,6 +216,19 @@ class Clock(Protocol):
 
     def now(self) -> datetime:
         """Timezone-aware UTC. A naive datetime anywhere in this service is a bug."""
+        ...
+
+
+@runtime_checkable
+class FxRateProvider(Protocol):
+    """The FX rates seam. ``FX_PROVIDER_URL``: a vendor in production, sim-world locally.
+
+    Implementations raise :class:`~app.errors.FxRateUnavailableError` rather than return a
+    stale or partial snapshot — a payout that cannot be priced is refused, never guessed.
+    """
+
+    async def latest(self, base: str) -> FxRates:
+        """The provider's current rates against ``base``."""
         ...
 
 

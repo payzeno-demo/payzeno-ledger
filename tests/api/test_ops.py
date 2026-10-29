@@ -168,7 +168,13 @@ class StubManualMatch:
         return type(
             "MatchOutcome",
             (),
-            {"charge_id": self.resolves_to, "method": "manual", "confidence": 1.0},
+            {
+                "charge_id": self.resolves_to,
+                "method": "manual",
+                "confidence": 1.0,
+                "merchant_id": None,
+                "expected_gross_minor": None,
+            },
         )()
 
 
@@ -219,7 +225,7 @@ async def test_trial_balance_accepts_a_point_in_time() -> None:
     body = await run_trial_balance(_body(currency="GBP", as_of=NOW), audit, CALLER)
 
     assert audit.calls == [("GBP", NOW)]
-    assert body["as_of"] == NOW
+    assert body["as_of"] == NOW.isoformat()
 
 
 async def test_an_imbalance_shows_up_as_a_signed_delta() -> None:

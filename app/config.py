@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     #: Shared with payzeno-api's INTERNAL_API_SECRET and payzeno-billing-legacy's
     #: PAYZENO_INTERNAL_SECRET. All three must match or nothing talks to us.
     internal_api_secret: str = "dev-internal-secret-do-not-use-anywhere-real"
+    #: Require the mTLS client-cert subject header nginx adds in ECS. Only the local
+    #: compose override turns this off; nothing in envs/ sets it.
+    internal_auth_require_client_cert: bool = True
 
     # -- messaging -----------------------------------------------------------------
     sns_ledger_topic_arn: str = (
@@ -122,6 +125,13 @@ class Settings(BaseSettings):
     payout_cutoff_sepa_utc: str = "14:00"
     payout_cutoff_faster_payments_utc: str = "17:30"
 
+    # -- FX (RFC platform-v2 §7) ----------------------------------------------------
+    #: `GET {url}/v1/rates?base=USD`. A vendor in production, sim-world's feed locally.
+    fx_provider_url: str = "http://sim-fx:3200"
+    #: Taken off the mid-rate when a payout converts: the merchant receives
+    #: mid x (1 - bps/10_000) and the difference is booked to `fx_revenue`.
+    fx_payout_markup_bps: int = Field(default=100, ge=0, lt=10_000)
+
     # -- periodic jobs that are not always on --------------------------------------
     ledger_audit_enabled: bool = True
     settlement_import_enabled: bool = True
@@ -171,7 +181,7 @@ class Settings(BaseSettings):
         the same mapping and a new rail is one field plus one key.
         """
         return {
-            "ach": self.payout_cutoff_ach_utc,
+            "standard_ach": self.payout_cutoff_ach_utc,
             "same_day_ach": self.payout_cutoff_same_day_ach_utc,
             "sepa": self.payout_cutoff_sepa_utc,
             "faster_payments": self.payout_cutoff_faster_payments_utc,

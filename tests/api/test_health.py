@@ -28,6 +28,7 @@ from app.api.routers import health
 from app.api.routers.health import (
     READINESS_BUDGET_MS,
     SERVICE_NAME,
+    SERVICE_VERSION,
     healthz,
     readyz,
 )
@@ -63,12 +64,12 @@ def test_the_router_declares_no_auth_dependency() -> None:
 # --------------------------------------------------------------------------------------
 
 
-async def test_healthz_reports_the_service_and_an_uptime() -> None:
+async def test_healthz_reports_the_service_and_its_version() -> None:
+    """Exactly the `HealthResponse` contract, which forbids extra keys."""
     body = await healthz()
 
-    assert body["status"] == "ok"
-    assert body["service"] == SERVICE_NAME == "payzeno-ledger"
-    assert body["uptime_seconds"] >= 0
+    assert body == {"status": "ok", "service": "payzeno-ledger", "version": SERVICE_VERSION}
+    assert body["service"] == SERVICE_NAME
 
 
 def test_liveness_never_opens_a_session() -> None:
@@ -87,8 +88,7 @@ async def test_healthz_is_cheap_enough_to_call_every_two_seconds() -> None:
     first = await healthz()
     second = await healthz()
 
-    assert first["service"] == second["service"]
-    assert second["uptime_seconds"] >= first["uptime_seconds"]
+    assert first == second
 
 
 # --------------------------------------------------------------------------------------
@@ -115,13 +115,13 @@ async def test_a_healthy_readyz_leaves_the_status_code_alone(sessions_factory) -
     assert response.status_code == status.HTTP_200_OK
 
 
-async def test_readyz_reports_latency(sessions_factory) -> None:
+async def test_readyz_body_is_exactly_the_contract(sessions_factory) -> None:
+    """`ReadinessResponse` is `status` + `checks` and forbids anything else."""
     response = Response()
 
     body = await readyz(sessions_factory, response)
 
-    assert body["latency_ms"] >= 0
-    assert body["latency_ms"] <= READINESS_BUDGET_MS
+    assert set(body) == {"status", "checks"}
 
 
 async def test_an_unreachable_database_is_a_503(failing_sessions) -> None:
@@ -149,8 +149,7 @@ async def test_the_probe_reports_a_failure_rather_than_raising(failing_sessions)
 
     body = await readyz(failing_sessions, response)
 
-    assert body["service"] == SERVICE_NAME
-    assert "latency_ms" in body
+    assert set(body) == {"status", "checks"}
 
 
 async def test_a_slow_database_is_degraded_not_ok(sessions_factory, monkeypatch) -> None:

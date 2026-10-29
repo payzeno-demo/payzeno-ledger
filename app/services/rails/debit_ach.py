@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domain.calendar import BankingCalendar
-from app.domain.idempotency import ledger_key
+from app.domain.idempotency import ledger_key, sha256_of
 from app.domain.postings import PostingLine
 from app.errors import BankAccountUnusableError
 from app.logging import get_logger
@@ -112,7 +112,7 @@ class AchPayoutPuller:
                 ),
             ],
             created_by="system",
-            request_fingerprint=ledger_key("debitpullfp", merchant_id, reason),
+            request_fingerprint=sha256_of(ledger_key("debitpullfp", merchant_id, reason)),
         )
 
         logger.info(

@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.clients.breaker import BreakerProcessorClient, build_breaker
+from app.clients.fx import HttpFxRateProvider
 from app.clients.nordpay import NordpayClient
 from app.clients.sandbox import SandboxProcessorClient
 from app.clients.worldflow import WorldflowClient
@@ -67,6 +68,7 @@ from app.services.audit import AdjustmentService, LedgerAuditService
 from app.services.balances import BalanceService
 from app.services.captures import DeferredCaptureService
 from app.services.funding import FundingMatchService
+from app.services.fx import FxRateService
 from app.services.invoices import InvoiceStagingService
 from app.services.payouts import PayoutCalculator, PayoutService
 from app.services.rails.ach import AchPayoutInitiator, SameDayAchPayoutInitiator
@@ -78,6 +80,7 @@ from app.services.reconciliation.matcher import (
     ExactReferenceMatch,
     HeuristicAmountWindowMatch,
     ManualMatch,
+    MatchStrategy,
     NetworkTransactionMatch,
 )
 from app.services.reconciliation.poster import SettlementPoster
@@ -93,6 +96,7 @@ from app.workers.ledger_audit import LedgerAuditJob
 from app.workers.negative_balance import NegativeBalanceJob
 from app.workers.outbox_drain import OutboxDrainJob
 from app.workers.payout_scheduler import PayoutSchedulerJob
+from app.workers.payout_sweep import PayoutSweepJob
 from app.workers.reconcile_sweep import ReconciliationSweepJob
 from app.workers.reserve_release import ReserveReleaseJob
 from app.workers.retry_drain import RetryDrainJob
@@ -116,12 +120,12 @@ class Repositories:
 
     def __init__(self) -> None:
         self.accounts = AccountRepository()
-        self.transactions = LedgerTransactionRepository()
-        self.entries = LedgerEntryRepository()
+        self.ledger_transactions = LedgerTransactionRepository()
+        self.ledger_entries = LedgerEntryRepository()
         self.balance_cache = MerchantBalanceCacheRepository()
-        self.batches = SettlementBatchRepository()
-        self.items = ReconciliationItemRepository()
-        self.runs = ReconciliationRunRepository()
+        self.settlement_batches = SettlementBatchRepository()
+        self.reconciliation_items = ReconciliationItemRepository()
+        self.reconciliation_runs = ReconciliationRunRepository()
         self.charges = SettlementChargeRepository()
         self.merchants = MerchantProjectionRepository()
         self.banks = BankAccountProjectionRepository()
@@ -133,6 +137,10 @@ class Repositories:
         self.reserves = ReserveHoldRepository()
         self.adjustments = LedgerAdjustmentRequestRepository()
         self.invoice_staging = InvoiceLineStagingRepository()
+        #: Not a repository: the strategies the legacy import route hands to
+        #: ``SettlementService.import_legacy_records``. Filled in by ``Container`` once they
+        #: exist, because they need the clock.
+        self.match_strategies: list[MatchStrategy] = []
 
 
 class Container:
@@ -178,12 +186,13 @@ class Container:
         # OutboxDrainJob, and must never be handed to a service.
         self.publisher = OutboxPublisher(repos.outbox)
         self.sns_publisher = SnsPublisher(settings)
+        self.fx_provider = HttpFxRateProvider(settings)
 
         # -- L5 services -------------------------------------------------------------
         self.account_resolver = AccountResolver(repos.accounts, self.clock)
         self.ledger_poster = LedgerPoster(
-            transactions=repos.transactions,
-            entries=repos.entries,
+            transactions=repos.ledger_transactions,
+            entries=repos.ledger_entries,
             accounts=repos.accounts,
             balances=repos.balance_cache,
             resolver=self.account_resolver,
@@ -193,14 +202,14 @@ class Container:
         self.balance_service = BalanceService(
             sessions=self.sessions,
             balances=repos.balance_cache,
-            entries=repos.entries,
+            entries=repos.ledger_entries,
             accounts=repos.accounts,
             clock=self.clock,
         )
 
         # THE shared poster. One instance; both reconciliation paths hold it.
         self.settlement_poster = SettlementPoster(
-            transactions=repos.transactions,
+            transactions=repos.ledger_transactions,
             charges=repos.charges,
             merchants=repos.merchants,
             ledger=self.ledger_poster,
@@ -216,11 +225,12 @@ class Container:
             NetworkTransactionMatch(repos.charges),
             HeuristicAmountWindowMatch(repos.charges, self.clock),
         ]
+        repos.match_strategies = self.match_strategies
         self.manual_match = ManualMatch(repos.charges)
 
         self.settlement_service = SettlementService(
-            batches=repos.batches,
-            items=repos.items,
+            batches=repos.settlement_batches,
+            items=repos.reconciliation_items,
             publisher=self.publisher,
             clock=self.clock,
         )
@@ -228,7 +238,7 @@ class Container:
             sessions=self.sessions,
             processor=self.processor,
             settlements=self.settlement_service,
-            items=repos.items,
+            items=repos.reconciliation_items,
             strategies=self.match_strategies,
             clock=self.clock,
         )
@@ -236,9 +246,9 @@ class Container:
         self.reconciliation_service = ReconciliationService(
             sessions=self.sessions,
             locks=self.locks,
-            batches=repos.batches,
-            items=repos.items,
-            runs=repos.runs,
+            batches=repos.settlement_batches,
+            items=repos.reconciliation_items,
+            runs=repos.reconciliation_runs,
             poster=self.settlement_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -249,7 +259,7 @@ class Container:
         # the constructor changed and this file changed with it.
         self.retry_scheduler = RetryScheduler(
             sessions=self.sessions,
-            items=repos.items,
+            items=repos.reconciliation_items,
             poster=self.settlement_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -259,9 +269,9 @@ class Container:
         )
         self.backlog_service = BacklogService(
             sessions=self.sessions,
-            items=repos.items,
-            batches=repos.batches,
-            runs=repos.runs,
+            items=repos.reconciliation_items,
+            batches=repos.settlement_batches,
+            runs=repos.reconciliation_runs,
             clock=self.clock,
         )
 
@@ -271,7 +281,7 @@ class Container:
         # calendar has no row for, which is a weekend-only answer and always right.
         self.calendar = BankingCalendar()
         self.payout_calculator = PayoutCalculator(
-            entries=repos.entries, payouts=repos.payouts, merchants=repos.merchants
+            entries=repos.ledger_entries, payouts=repos.payouts, merchants=repos.merchants
         )
         self.payout_initiators = {
             AchPayoutInitiator.method: AchPayoutInitiator(
@@ -287,6 +297,9 @@ class Container:
                 settings, self.calendar, self.clock
             ),
         }
+        self.fx_service = FxRateService(
+            self.fx_provider, self.clock, payout_markup_bps=settings.fx_payout_markup_bps
+        )
         self.payout_service = PayoutService(
             locks=self.locks,
             payouts=repos.payouts,
@@ -299,6 +312,7 @@ class Container:
             publisher=self.publisher,
             flags=self.flags,
             clock=self.clock,
+            fx=self.fx_service,
         )
         self.ach_puller = AchPayoutPuller(
             banks=repos.banks,
@@ -311,7 +325,7 @@ class Container:
         self.funding_service = FundingMatchService(
             sessions=self.sessions,
             fundings=repos.fundings,
-            batches=repos.batches,
+            batches=repos.settlement_batches,
             ledger=self.ledger_poster,
             publisher=self.publisher,
             clock=self.clock,
@@ -334,8 +348,8 @@ class Container:
         )
         self.audit_service = LedgerAuditService(
             sessions=self.sessions,
-            entries=repos.entries,
-            transactions=repos.transactions,
+            entries=repos.ledger_entries,
+            transactions=repos.ledger_transactions,
             balances=repos.balance_cache,
             publisher=self.publisher,
             clock=self.clock,
@@ -352,7 +366,7 @@ class Container:
             sqs_client_factory=sqs_factory,
             settings=settings,
             charges=repos.charges,
-            transactions=repos.transactions,
+            transactions=repos.ledger_transactions,
             ledger=self.ledger_poster,
             clock=self.clock,
         )
@@ -373,7 +387,7 @@ class Container:
         # other ten still start.
         self.reconciliation_sweep_job = ReconciliationSweepJob(
             sessions=self.sessions,
-            batches=repos.batches,
+            batches=repos.settlement_batches,
             service=self.reconciliation_service,
             settings=settings,
         )
@@ -385,7 +399,7 @@ class Container:
         )
         self.batch_close_job = BatchCloseJob(
             sessions=self.sessions,
-            batches=repos.batches,
+            batches=repos.settlement_batches,
             settlements=self.settlement_service,
             clock=self.clock,
             settings=settings,
@@ -395,6 +409,12 @@ class Container:
         )
         self.deferred_capture_job = DeferredCaptureJob(
             captures=self.capture_service, settings=settings
+        )
+        self.payout_sweep_job = PayoutSweepJob(
+            sessions=self.sessions,
+            payouts=self.payout_service,
+            repositories=repos,
+            clock=self.clock,
         )
         self.payout_scheduler_job = PayoutSchedulerJob(
             sessions=self.sessions,
@@ -423,6 +443,7 @@ class Container:
 
     async def aclose(self) -> None:
         """Dispose the engine. Called from ``create_app``'s shutdown hook."""
+        await self.fx_provider.aclose()
         await self.sessions.dispose()
 
     def describe(self) -> dict[str, Any]:

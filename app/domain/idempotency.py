@@ -6,7 +6,9 @@ clock, or a random value. Format::
 
     <purpose>:<scope_id>:<subject_id>
 
-Both ids are prefixed ULIDs. Two shapes are load-bearing and are enforced here:
+Every component is non-empty and free of the ``:`` separator. Each caller builds its key
+from the ids that identify its business fact; two shapes are load-bearing and are enforced
+here:
 
 * ``settle``'s subject is the ``reconciliation_item`` id, not the charge id. A charge
   legitimately appears in two batches (original + representment) and an acquirer file
@@ -31,20 +33,17 @@ from app.errors import ValidationError
 #: Purposes whose scope must be a batch id and whose subject must be an item id.
 _ITEM_SCOPED: Final[frozenset[str]] = frozenset({"settle"})
 
-#: Purpose -> (expected scope prefix, expected subject prefix or None for "empty").
-_KEY_SHAPES: Final[dict[str, tuple[str, str | None]]] = {
-    "auth": ("pi", "ch"),
-    "auth_release": ("ch", None),
-    "capture": ("ch", None),
+#: The component separator. A component containing it would let two facts share a key.
+_SEPARATOR: Final[str] = ":"
+
+#: Purpose -> (scope id prefix, subject id prefix), for the purposes held to their prefixes.
+#: Only ``settle``: it is the key the PAY-2041 guard stands on, and the one where a raw
+#: acquirer reference in the item slot would collide across batches (PAY-2090). Every other
+#: caller keys on whatever ids identify its fact — ``capture`` alone is scoped by merchant
+#: on the payments path and by batch on the settlement path — so those are checked for
+#: shape only.
+_STRICT_KEY_SHAPES: Final[dict[str, tuple[str, str]]] = {
     "settle": ("sb", "ri"),
-    "settlement_funding": ("sb", "fe"),
-    "refund": ("ch", "re"),
-    "dispute": ("ch", "dp"),
-    "reserve_release": ("mch", "rh"),
-    "payout": ("po", None),
-    "payout_reversal": ("po", None),
-    "reversal": ("txn", None),
-    "adjustment": ("lar", None),
 }
 
 #: The `capture` key handed to the acquirer is batch-scoped, not intent-scoped: the ledger
@@ -53,36 +52,39 @@ _ACQUIRER_CAPTURE_SHAPE: Final[tuple[str, str]] = ("sb", "ch")
 
 
 def ledger_key(purpose: str, scope_id: str, subject_id: str = "") -> str:
-    """Build the deterministic transaction idempotency key.
+    """Build the deterministic ``<purpose>:<scope_id>:<subject_id>`` key.
 
-    Validates the id prefixes against :data:`_KEY_SHAPES` so a raw acquirer reference can
-    never land in a ULID slot. ``fee`` is the one purpose whose scope is a free-form fee
-    type rather than an id, because non-transactional fees have no owning entity.
+    Every component must be non-empty and must not contain the separator; anything else is
+    a ``ValueError``, because a malformed key is a bug in the caller rather than a bad
+    request. ``settle`` is also held to its id prefixes (:data:`_STRICT_KEY_SHAPES`) so a
+    raw acquirer reference can never land in the item slot. ``fee`` is the one purpose
+    whose scope is a free-form fee type rather than an id, because non-transactional fees
+    have no owning entity, and the one that may omit its subject.
     """
-    if purpose == "fee":
-        if not scope_id or ":" in scope_id:
-            raise ValidationError(
-                "fee keys need a <fee_type> scope", details={"scope_id": scope_id}
-            )
-        return f"fee:{scope_id}:{subject_id}"
+    components = (("purpose", purpose), ("scope", scope_id), ("subject", subject_id))
+    for name, value in components:
+        if not value:
+            if purpose == "fee" and name == "subject":
+                continue
+            raise ValueError(f"ledger key {name} component is empty")
+        if _SEPARATOR in value:
+            raise ValueError(f"ledger key {name} component contains the separator {_SEPARATOR!r}")
 
-    shape = _KEY_SHAPES.get(purpose)
-    if shape is None:
-        raise ValidationError("unknown ledger purpose", details={"purpose": purpose})
+    shape = _STRICT_KEY_SHAPES.get(purpose)
+    if shape is not None:
+        _require_prefix(scope_id, shape[0])
+        _require_prefix(subject_id, shape[1])
+    return f"{purpose}{_SEPARATOR}{scope_id}{_SEPARATOR}{subject_id}"
 
-    scope_prefix, subject_prefix = shape
-    ids.require(scope_id, scope_prefix)
 
-    if subject_prefix is None:
-        if subject_id:
-            raise ValidationError(
-                "this purpose takes no subject id",
-                details={"purpose": purpose, "subject_id": subject_id},
-            )
-        return f"{purpose}:{scope_id}:"
-
-    ids.require(subject_id, subject_prefix)
-    return f"{purpose}:{scope_id}:{subject_id}"
+def _require_prefix(value: str, prefix: str) -> None:
+    """The id prefix only — ``sb_``, ``ri_`` — not the ULID body behind it."""
+    actual, underscore, _ = value.partition("_")
+    if not underscore or actual != prefix:
+        raise ValidationError(
+            "unexpected id prefix",
+            details={"value": value, "expected": prefix, "actual": actual},
+        )
 
 
 def acquirer_capture_key(batch_id: str, charge_id: str) -> str:

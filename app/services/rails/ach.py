@@ -7,7 +7,7 @@ because they share the file format and the originator config.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import time, timedelta
 from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ ODFI_ROUTING_NUMBER = "021000021"
 class AchPayoutInitiator(PayoutInitiator):
     """Standard next-day ACH credit."""
 
-    method: ClassVar[str] = "ach"
+    method: ClassVar[str] = "standard_ach"
 
     def __init__(self, settings: Settings, calendar: BankingCalendar, clock: Clock) -> None:
         self._settings = settings
@@ -40,7 +40,7 @@ class AchPayoutInitiator(PayoutInitiator):
     ) -> InitiationResult:
         self._assert_usable(bank)
         submitted_at = self._clock.now()
-        cutoff = self._settings.payout_cutoff_ach_utc
+        cutoff = time.fromisoformat(self._settings.payout_cutoff_ach_utc)
         effective = submitted_at.date()
         if submitted_at.time() >= cutoff:
             effective = self._calendar.next_business_day(effective, payout.currency, self.method)
@@ -94,7 +94,7 @@ class SameDayAchPayoutInitiator(AchPayoutInitiator):
             )
             return await AchPayoutInitiator.initiate(self, session, payout, bank)
 
-        cutoff = self._settings.payout_cutoff_same_day_ach_utc
+        cutoff = time.fromisoformat(self._settings.payout_cutoff_same_day_ach_utc)
         arrival = submitted_at.date()
         if submitted_at.time() >= cutoff:
             arrival = self._calendar.next_business_day(arrival, payout.currency, self.method)

@@ -13,7 +13,10 @@ transaction. Without it an ACH failure permanently destroys the merchant's money
 ``payout`` already debited ``merchant_payable``, ``failed`` is terminal, and nothing gives
 it back.
 
-``pix_payout_in_flight`` is **unique** (migration ``0033``).
+``pix_payout_in_flight`` is **unique** (migration ``0033``), keyed since ``0035`` on the
+*balance* the payout drew from — ``coalesce(source_currency, currency)`` — because that is
+the currency ``acquire_merchant_currency_lock`` is taken on. A EUR balance and a USD
+balance both swept into one USD bank account are two different balances, not a duplicate.
 ``PayoutCalculator.compute_available`` subtracts in-flight payouts by reading rows a
 concurrent uncommitted transaction has not written yet — the identical check-then-act
 shape as PAY-2041, on the path that moves money to a bank account. ``create_payout`` takes
@@ -26,6 +29,7 @@ This file went cold about eight weeks ago when ``mhandover`` started handing ove
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 from typing import ClassVar, Final
 
 from sqlalchemy import (
@@ -35,8 +39,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Numeric,
     String,
     Text,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -104,6 +110,17 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
     #: The rail's own reference, returned by `PayoutInitiator.initiate`.
     bank_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Set only when the payout converted (RFC platform-v2 §7): the balance it was drawn
+    #: from. `amount_minor`/`currency` above are what lands in the bank. All four are null
+    #: together or set together — `chk_payout_fx_complete`.
+    source_amount_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_currency: Mapped[str | None] = mapped_column(Currency, nullable=True)
+    #: Bank-currency units per one source unit, after the payout markup. Exact decimal.
+    fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 10), nullable=True)
+    #: What the markup kept, in bank-currency minor units, booked to `fx_revenue`. Stored
+    #: because the reversal has to give back exactly what the conversion took.
+    fx_spread_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     initiated_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -115,6 +132,12 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
 
     __table_args__ = (
         CheckConstraint("amount_minor > 0", name="amount_positive"),
+        CheckConstraint(
+            "(source_currency is null and source_amount_minor is null and fx_rate is null"
+            " and fx_spread_minor is null) or (source_currency is not null"
+            " and source_amount_minor > 0 and fx_rate > 0 and fx_spread_minor >= 0)",
+            name="fx_complete",
+        ),
         # Invariant 7. A payout in failed/returned MUST carry its reversal.
         CheckConstraint(
             "status not in ('failed','returned') or reversal_transaction_id is not null",
@@ -127,16 +150,25 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
             postgresql_ops={"created_at": "DESC"},
         ),
         Index("ix_payout_status_available", "status", "available_on"),
-        # Unique from 0033. One in-flight payout per (merchant, currency, livemode).
-        Index(
-            "pix_payout_in_flight",
-            "merchant_id",
-            "currency",
-            "livemode",
-            unique=True,
-            postgresql_where="status in ('scheduled','in_transit')",
-        ),
+        # `pix_payout_in_flight` is declared below the class: since 0035 it is keyed on an
+        # expression over two of these columns, which cannot be named as strings here.
     )
+
+    @property
+    def balance_currency(self) -> str:
+        """The currency of the balance this payout came out of."""
+        return self.source_currency or self.currency
+
+    @property
+    def balance_amount_minor(self) -> int:
+        """How much it took out of that balance, in that balance's minor units."""
+        if self.source_amount_minor is not None:
+            return self.source_amount_minor
+        return self.amount_minor
+
+    def is_converted(self) -> bool:
+        """Whether the payout crossed currencies on its way to the bank."""
+        return self.source_currency is not None
 
     def is_in_flight(self) -> bool:
         """Money has left the payable balance but has not landed."""
@@ -163,3 +195,15 @@ class Payout(Base, TimestampMixin, LivemodeMixin):
         state machine and posts Dr ``cash`` / Cr ``merchant_payable``.
         """
         return self.method == "debit_ach"
+
+
+# Unique from 0033, re-keyed by 0035. One in-flight payout per (merchant, balance currency,
+# livemode) — the same key as the advisory lock `create_payout` takes.
+Index(
+    "pix_payout_in_flight",
+    Payout.merchant_id,
+    func.coalesce(Payout.source_currency, Payout.currency),
+    Payout.livemode,
+    unique=True,
+    postgresql_where=Payout.status.in_(IN_FLIGHT_STATUSES),
+)

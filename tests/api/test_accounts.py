@@ -45,6 +45,7 @@ def _account(
             "merchant_id": "mer_api",
             "type": account_type,
             "currency": "USD",
+            "normal_balance": "credit",
             "livemode": True,
             "status": status,
             "created_at": created_at or NOW,

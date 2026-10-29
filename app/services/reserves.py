@@ -12,7 +12,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.idempotency import ledger_key
+from app.domain.idempotency import ledger_key, sha256_of
 from app.domain.postings import PostingLine
 from app.errors import ValidationError
 from app.logging import get_logger
@@ -76,7 +76,7 @@ class ReserveService:
             reference_id=hold.id,
             lines=[
                 PostingLine(
-                    account_type="merchant_reserve",
+                    account_type="reserve",
                     direction="debit",
                     amount_minor=hold.amount_minor,
                 ),
@@ -87,7 +87,9 @@ class ReserveService:
                 ),
             ],
             created_by="system",
-            request_fingerprint=ledger_key("reservereleasefp", hold.id, hold.release_on.isoformat()),
+            request_fingerprint=sha256_of(
+                ledger_key("reservereleasefp", hold.id, hold.release_on.isoformat())
+            ),
         )
         hold.released_transaction_id = posted.transaction.id
         hold.updated_at = self._clock.now()

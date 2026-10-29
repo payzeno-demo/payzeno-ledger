@@ -29,6 +29,9 @@ RESERVE_HOLD: Final[str] = "rh"
 ADJUSTMENT_REQUEST: Final[str] = "lar"
 OUTBOX_EVENT: Final[str] = "evt"
 INVOICE_LINE_STAGING: Final[str] = "ils"
+#: Minted by RequestIdMiddleware / CorrelationIdMiddleware when the caller sent none.
+REQUEST: Final[str] = "req"
+CORRELATION: Final[str] = "cor"
 
 OWNED_PREFIXES: Final[frozenset[str]] = frozenset(
     {
@@ -45,6 +48,8 @@ OWNED_PREFIXES: Final[frozenset[str]] = frozenset(
         ADJUSTMENT_REQUEST,
         OUTBOX_EVENT,
         INVOICE_LINE_STAGING,
+        REQUEST,
+        CORRELATION,
     }
 )
 

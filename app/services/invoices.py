@@ -91,17 +91,17 @@ class InvoiceStagingService:
             InvoiceLineStaging(
                 id=new_id("ils"),
                 merchant_id=merchant_id,
-                invoice_public_id=invoice_public_id,
+                source_invoice_public_id=invoice_public_id,
                 period_start=period_start,
                 period_end=period_end,
                 currency=currency,
-                line_index=index,
+                line_no=index,
                 description=str(line.get("description", ""))[:255],
                 quantity=int(line.get("quantity", 1)),
                 unit_amount_minor=int(line.get("unit_amount_minor", 0)),
                 amount_minor=int(line.get("amount_minor", 0)),
                 tax_minor=int(line.get("tax_minor", 0)),
-                staged_at=staged_at,
+                created_at=staged_at,
             )
             for index, line in enumerate(lines)
         ]
@@ -134,8 +134,8 @@ class InvoiceStagingService:
                 "amount_minor": row.amount_minor,
                 "tax_minor": row.tax_minor,
                 "currency": row.currency,
-                "period_start": row.period_start.isoformat(),
-                "period_end": row.period_end.isoformat(),
+                "period_start": row.period_start.isoformat() if row.period_start else None,
+                "period_end": row.period_end.isoformat() if row.period_end else None,
             }
             for row in rows
         ]

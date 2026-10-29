@@ -223,9 +223,11 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
     ) -> BankAccountProjection:
         """The merchant's default account **for that currency**, or raise.
 
-        Currency is part of the key because there is no FX anywhere in Payzeno: a EUR
-        payout requires a EUR account, and paying a EUR balance into a USD account is not
-        a rounding problem, it is the wrong bank. ``CreatePayoutRequest.bank_account_id``
+        Currency is part of the key because a merchant may hold one default per currency.
+        Since RFC platform-v2 a balance with no same-currency account can still be paid
+        out — converted into the merchant's default account — but that fallback is the
+        payout service's decision (:meth:`find_default`, :meth:`list_defaults`), not this
+        lookup's. ``CreatePayoutRequest.bank_account_id``
         is optional precisely so the ledger can resolve this, and
         ``pix_bank_account_projection_default`` — unique, partial on ``is_default`` — is
         what makes "the default" a single row rather than a coin flip.
@@ -250,6 +252,42 @@ class BankAccountProjectionRepository(BaseRepository[BankAccountProjection]):
                 currency=currency,
             )
         return found
+
+    async def find_default(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        currency: str,
+        livemode: bool,
+    ) -> BankAccountProjection | None:
+        """:meth:`get_default` without the raise — for callers with a fallback."""
+        stmt = (
+            select(BankAccountProjection)
+            .where(BankAccountProjection.merchant_id == merchant_id)
+            .where(BankAccountProjection.currency == currency)
+            .where(BankAccountProjection.livemode == livemode)
+            .where(BankAccountProjection.is_default.is_(True))
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def list_defaults(
+        self, session: AsyncSession, *, merchant_id: str, livemode: bool
+    ) -> list[BankAccountProjection]:
+        """The merchant's default account in each currency it has one, by currency.
+
+        At most one per currency (``pix_bank_account_projection_default``). The payout
+        service picks from these when a balance has no same-currency account and has to
+        be converted on its way out.
+        """
+        stmt = (
+            select(BankAccountProjection)
+            .where(BankAccountProjection.merchant_id == merchant_id)
+            .where(BankAccountProjection.livemode == livemode)
+            .where(BankAccountProjection.is_default.is_(True))
+            .order_by(BankAccountProjection.currency)
+        )
+        return list((await session.execute(stmt)).scalars().all())
 
     async def list_for_merchant(
         self,

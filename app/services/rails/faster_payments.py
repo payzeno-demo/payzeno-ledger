@@ -7,6 +7,7 @@ the split happens at the rail and only the aggregate reference comes back.
 
 from __future__ import annotations
 
+from datetime import time
 from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +60,8 @@ class FasterPaymentsPayoutInitiator(PayoutInitiator):
         # FPS clears on the same calendar day whenever the sponsor bank is open; the
         # cutoff still matters because our sponsor batches after 21:00 UTC.
         arrival = submitted_at.date()
-        if submitted_at.time() >= self._settings.payout_cutoff_faster_payments_utc:
+        cutoff = time.fromisoformat(self._settings.payout_cutoff_faster_payments_utc)
+        if submitted_at.time() >= cutoff:
             arrival = self._calendar.next_business_day(arrival, payout.currency, self.method)
 
         parts = 1

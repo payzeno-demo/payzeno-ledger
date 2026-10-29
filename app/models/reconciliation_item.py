@@ -44,6 +44,7 @@ from app.models.base import (
     Currency,
     LivemodeMixin,
     TimestampMixin,
+    acquirer_enum,
     reconciliation_item_status_enum,
     reconciliation_line_type_enum,
     reconciliation_match_method_enum,
@@ -86,6 +87,9 @@ class ReconciliationItem(Base, TimestampMixin, LivemodeMixin):
     variance_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
 
     currency: Mapped[str] = mapped_column(Currency, nullable=False)
+    #: Copied from the batch at import (one batch is one acquirer file). Scopes the
+    #: matcher's charge lookups and is what `confirm_settlement` is sent. Migration 0034.
+    acquirer: Mapped[str] = mapped_column(acquirer_enum, nullable=False)
     acquirer_reference: Mapped[str] = mapped_column(Text, nullable=False)
     #: The acquirer's copy of `network_transaction_id`, for match strategy 2.
     network_reference: Mapped[str | None] = mapped_column(Text, nullable=True)

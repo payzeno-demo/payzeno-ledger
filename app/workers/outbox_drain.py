@@ -18,6 +18,7 @@ contract downstream is written against.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import ClassVar, Final
 
@@ -87,15 +88,23 @@ class OutboxDrainJob(PeriodicJob):
             pending = await self._outbox.list_unpublished(
                 session, limit=BATCH_SIZE, max_attempts=MAX_PUBLISH_ATTEMPTS
             )
+            # The stored payload is the rendered envelope; the drain must not rebuild it.
             staged = [
-                (row.id, row.event_type, row.body, row.merchant_id, row.correlation_id)
+                (
+                    row.id,
+                    row.type,
+                    json.dumps(row.payload, default=str),
+                    row.merchant_id,
+                    row.correlation_id,
+                )
                 for row in pending
             ]
 
         published = 0
         for row_id, event_type, body, merchant_id, correlation_id in staged:
             try:
-                message_id = await self._publisher.publish_raw(
+                # SnsPublisher logs the SNS message id; the outbox has no column for it.
+                await self._publisher.publish_raw(
                     event_type=event_type,
                     body=body,
                     merchant_id=merchant_id,
@@ -114,12 +123,7 @@ class OutboxDrainJob(PeriodicJob):
                 continue
 
             async with self._sessions.begin() as session:
-                await self._outbox.mark_published(
-                    session,
-                    row_id,
-                    message_id=message_id,
-                    published_at=self._clock.now(),
-                )
+                await self._outbox.mark_published(session, row_id, at=self._clock.now())
             published += 1
             metrics.increment("OutboxPublished", event_type=event_type)
 

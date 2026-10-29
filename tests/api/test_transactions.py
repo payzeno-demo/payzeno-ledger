@@ -151,6 +151,15 @@ class StubEntries:
         self.reads.append(transaction_id)
         return self.rows
 
+    async def list_for_transactions(
+        self, session: Any, transaction_ids: list[str]
+    ) -> dict[str, list[Any]]:
+        self.reads.extend(transaction_ids)
+        return {
+            txn_id: [row for row in self.rows if row.transaction_id == txn_id]
+            for txn_id in transaction_ids
+        }
+
 
 class StubRepositories:
     def __init__(

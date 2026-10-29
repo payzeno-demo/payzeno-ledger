@@ -21,7 +21,7 @@ from app.api.deps import (
     get_sessions,
     require_internal_service,
 )
-from app.api.schemas import LedgerEntry, Paginated
+from app.api.schemas import LedgerEntry, Paginated, contract_page, contract_payload
 from app.errors import ValidationError
 from app.logging import get_logger
 from app.ports import SessionFactory
@@ -45,17 +45,20 @@ MAX_WINDOW_DAYS = 92
 
 
 def _serialise(entry: Any) -> dict[str, Any]:
-    return {
-        "id": entry.id,
-        "object": "ledger_entry",
-        "transaction_id": entry.transaction_id,
-        "account_id": entry.account_id,
-        "direction": entry.direction,
-        "amount_minor": entry.amount_minor,
-        "currency": entry.currency,
-        "sequence": entry.sequence,
-        "created_at": entry.created_at,
-    }
+    return contract_payload(
+        LedgerEntry,
+        {
+            "id": entry.id,
+            "object": "ledger_entry",
+            "transaction_id": entry.transaction_id,
+            "account_id": entry.account_id,
+            "direction": entry.direction,
+            "amount_minor": entry.amount_minor,
+            "currency": entry.currency,
+            "sequence": entry.sequence,
+            "created_at": entry.created_at,
+        },
+    )
 
 
 @router.get(
@@ -108,9 +111,9 @@ async def list_entries(
             returned=len(page.items),
             has_more=page.has_more,
         )
-        return {
-            "object": "list",
-            "data": [_serialise(entry) for entry in page.items],
-            "has_more": page.has_more,
-            "next_cursor": page.next_cursor,
-        }
+        return contract_page(
+            LedgerEntry,
+            [_serialise(entry) for entry in page.items],
+            has_more=page.has_more,
+            next_cursor=page.next_cursor,
+        )

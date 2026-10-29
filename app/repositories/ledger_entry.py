@@ -21,10 +21,10 @@ from typing import Any, ClassVar
 from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.account import Account
+from app.models.account import NORMAL_BALANCE_BY_TYPE, Account
 from app.models.ledger_entry import LedgerEntry
 from app.models.ledger_transaction import LedgerTransaction
-from app.repositories.base import BaseRepository
+from app.repositories.base import BaseRepository, Page
 
 #: The account types that make up each balance bucket the API reports. Kept here rather
 #: than in the service because the SQL is what needs them; `BalanceService` reads the
@@ -87,6 +87,7 @@ class BalanceBucketRow:
 
     bucket_start: dt.datetime
     delta_minor: int
+    entry_count: int = 0
 
 
 class LedgerEntryRepository(BaseRepository[LedgerEntry]):
@@ -96,6 +97,29 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
 
     def _default_order(self) -> ColumnElement[Any]:
         return LedgerEntry.id
+
+    async def list_page(
+        self,
+        session: AsyncSession,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        created_from: dt.datetime | None = None,
+        created_to: dt.datetime | None = None,
+        **filters: Any,
+    ) -> Page[LedgerEntry]:
+        """Keyset page of entries, optionally inside ``[created_from, created_to)``.
+
+        The window is a range on ``created_at`` rather than a column equality, so it is
+        turned into predicates here instead of reaching the generic filter, which would
+        reject it as an unknown column.
+        """
+        where = []
+        if created_from is not None:
+            where.append(LedgerEntry.created_at >= created_from)
+        if created_to is not None:
+            where.append(LedgerEntry.created_at < created_to)
+        return await super().list_page(session, cursor=cursor, limit=limit, where=where, **filters)
 
     async def list_for_transaction(
         self, session: AsyncSession, transaction_id: str
@@ -113,6 +137,26 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
             .order_by(LedgerEntry.sequence)
         )
         return list((await session.execute(stmt)).scalars().all())
+
+    async def list_for_transactions(
+        self, session: AsyncSession, transaction_ids: list[str]
+    ) -> dict[str, list[LedgerEntry]]:
+        """Every leg of each of these transactions, keyed by transaction, in sequence order.
+
+        One query for a page of transactions rather than one per row; the list route
+        renders each transaction with its entries.
+        """
+        grouped: dict[str, list[LedgerEntry]] = {txn_id: [] for txn_id in transaction_ids}
+        if not transaction_ids:
+            return grouped
+        stmt = (
+            select(LedgerEntry)
+            .where(LedgerEntry.transaction_id.in_(transaction_ids))
+            .order_by(LedgerEntry.transaction_id, LedgerEntry.sequence)
+        )
+        for entry in (await session.execute(stmt)).scalars().all():
+            grouped[entry.transaction_id].append(entry)
+        return grouped
 
     async def sum_by_account_and_purpose(
         self,
@@ -195,10 +239,12 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
     ) -> dict[str, int]:
         """The per-merchant arm: one grouped query, four buckets out.
 
-        The sign convention matters. ``merchant_payable`` is credit-normal, so a credit
-        increases what Payzeno owes the merchant and must come back positive; summing raw
-        ``amount_minor`` would report a payout as an increase in the balance it just
-        spent.
+        The sign convention matters: each bucket reads positive on its account's normal
+        side. ``merchant_payable`` is credit-normal, so a credit increases what Payzeno owes
+        the merchant and must come back positive; summing raw ``amount_minor`` would report
+        a payout as an increase in the balance it just spent. ``merchant_receivable`` (the
+        pending bucket) is debit-normal, so an authorisation reads as positive pending.
+        ``LedgerPoster`` signs the cache deltas the same way.
         """
         signed = func.sum(
             case((LedgerEntry.direction == "credit", LedgerEntry.amount_minor), else_=0)
@@ -219,7 +265,11 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
 
         totals = dict.fromkeys(BUCKET_ACCOUNT_TYPES.values(), 0)
         for account_type, amount in (await session.execute(stmt)).all():
-            totals[BUCKET_ACCOUNT_TYPES[account_type]] = int(amount or 0)
+            credit_positive = int(amount or 0)
+            debit_normal = NORMAL_BALANCE_BY_TYPE.get(account_type) == "debit"
+            totals[BUCKET_ACCOUNT_TYPES[account_type]] = (
+                -credit_positive if debit_normal else credit_positive
+            )
         return totals
 
     async def sum_by_bucket(
@@ -248,7 +298,7 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
             case((LedgerEntry.direction == "debit", LedgerEntry.amount_minor), else_=0)
         )
         stmt = (
-            select(bucket, func.coalesce(signed, 0))
+            select(bucket, func.coalesce(signed, 0), func.count())
             .where(LedgerEntry.account_id == account_id)
             .where(LedgerEntry.created_at >= from_)
             .where(LedgerEntry.created_at < to)
@@ -256,7 +306,9 @@ class LedgerEntryRepository(BaseRepository[LedgerEntry]):
             .order_by(bucket)
         )
         return [
-            BalanceBucketRow(bucket_start=row[0], delta_minor=int(row[1] or 0))
+            BalanceBucketRow(
+                bucket_start=row[0], delta_minor=int(row[1] or 0), entry_count=int(row[2])
+            )
             for row in (await session.execute(stmt)).all()
         ]
 

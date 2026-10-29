@@ -41,6 +41,9 @@ TABLES = (
     "ledger_entry",
     "settlement_batch",
     "reconciliation_item",
+    # Not in 0009, whatever the note further down used to say: a fresh database reached the
+    # pix_payout_in_flight widening below without the column and the upgrade stopped there.
+    "payout",
 )
 
 
@@ -54,7 +57,7 @@ def upgrade() -> None:
     for table in TABLES:
         op.execute(f"UPDATE {table} SET livemode = true WHERE livemode IS NULL")  # noqa: S608
 
-    # payout already carried it from 0009; the projections from their own migrations.
+    # The projections carry it from their own migrations; payout gains it above.
     # Widen the two unique indexes that now have to include it.
     op.drop_index("uq_account_merchant_type_currency", table_name="account")
     op.create_index(

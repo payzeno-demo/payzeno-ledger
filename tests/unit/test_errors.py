@@ -30,6 +30,7 @@ from app.errors import (
     DualControlRequiredError,
     DuplicateDisputeError,
     DuplicateSettlementError,
+    FxRateUnavailableError,
     IdempotencyConflictError,
     InsufficientBalanceError,
     LedgerIntegrityError,
@@ -46,6 +47,7 @@ from app.errors import (
     RetryableSettlementError,
     RetryExhaustedError,
     SettlementError,
+    SettlementFileNotReadyError,
     SettlementLockedError,
     SettlementVarianceExceededError,
     TransactionNotFoundError,
@@ -86,7 +88,16 @@ STATUS_TABLE: list[tuple[type[PayzenoLedgerError], int, str]] = [
     (ProcessorUnavailableError, 502, "processor_unavailable"),
     (ProcessorIndeterminateError, 502, "processor_unavailable"),
     (BusPublishError, 502, "internal_error"),
+    # RFC platform-v2. "Not published yet" is a 404-shaped answer, not an upstream fault,
+    # and must not be an UpstreamError or the breaker counts it (see the class docstring).
+    (SettlementFileNotReadyError, 404, "not_found"),
+    (FxRateUnavailableError, 503, "internal_error"),
 ]
+
+
+def test_a_file_not_ready_is_not_something_the_breaker_counts() -> None:
+    assert not issubclass(SettlementFileNotReadyError, UpstreamError)
+    assert issubclass(FxRateUnavailableError, UpstreamError)
 
 
 @pytest.mark.parametrize(("cls", "status", "code"), STATUS_TABLE, ids=lambda v: getattr(v, "__name__", v))

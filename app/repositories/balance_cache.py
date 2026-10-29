@@ -123,6 +123,38 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         )
         await session.execute(stmt)
 
+    async def list_for_merchant(
+        self, session: AsyncSession, *, merchant_id: str, livemode: bool
+    ) -> list[MerchantBalanceCache]:
+        """Every currency the merchant has ever had a posting in, by currency.
+
+        ``GET /internal/v1/balances/{merchant}`` without ``?currency=`` — the per-currency
+        balance list (RFC platform-v2 §7). One primary-key prefix scan.
+        """
+        stmt = (
+            select(MerchantBalanceCache)
+            .where(MerchantBalanceCache.merchant_id == merchant_id)
+            .where(MerchantBalanceCache.livemode == livemode)
+            .order_by(MerchantBalanceCache.currency)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_payable(
+        self, session: AsyncSession, *, limit: int = 500
+    ) -> list[MerchantBalanceCache]:
+        """Balances with something available to pay out, merchant then currency.
+
+        ``PayoutSweepJob``'s candidate list. It is only a candidate list: the payout itself
+        recomputes the balance from ``ledger_entry`` under the merchant-currency lock.
+        """
+        stmt = (
+            select(MerchantBalanceCache)
+            .where(MerchantBalanceCache.available_minor > 0)
+            .order_by(MerchantBalanceCache.merchant_id, MerchantBalanceCache.currency)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
     async def list_stale(
         self,
         session: AsyncSession,
@@ -147,17 +179,22 @@ class MerchantBalanceCacheRepository(BaseRepository[MerchantBalanceCache]):
         return list((await session.execute(stmt)).scalars().all())
 
     async def list_negative(
-        self, session: AsyncSession, *, limit: int = 200
+        self, session: AsyncSession, *, threshold_minor: int = 0, limit: int = 200
     ) -> list[MerchantBalanceCache]:
         """Merchants who owe Payzeno money, largest shortfall first.
 
         Uses ``pix_merchant_balance_cache_negative``. ``NegativeBalanceJob`` reads this
         daily; past a threshold it opens a ``debit_ach`` payout that pulls funds back, and
         below the threshold it files a risk support task.
+
+        ``threshold_minor`` is applied here rather than in the job — ``available_minor <=
+        -threshold_minor``, i.e. a shortfall of at least that much — so the job does not
+        read every negative merchant every night to discard most of them.
         """
         stmt = (
             select(MerchantBalanceCache)
             .where(MerchantBalanceCache.negative_balance_minor > 0)
+            .where(MerchantBalanceCache.negative_balance_minor >= threshold_minor)
             .order_by(MerchantBalanceCache.negative_balance_minor.desc())
             .limit(limit)
         )

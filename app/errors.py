@@ -35,6 +35,7 @@ __all__ = [
     "DualControlRequiredError",
     "DuplicateDisputeError",
     "DuplicateSettlementError",
+    "FxRateUnavailableError",
     "IdempotencyConflictError",
     "InsufficientBalanceError",
     "LedgerIntegrityError",
@@ -51,6 +52,7 @@ __all__ = [
     "RetryExhaustedError",
     "RetryableSettlementError",
     "SettlementError",
+    "SettlementFileNotReadyError",
     "SettlementLockedError",
     "SettlementVarianceExceededError",
     "TransactionNotFoundError",
@@ -426,6 +428,31 @@ class ProcessorIndeterminateError(UpstreamError):
     """
 
     code: ClassVar[str] = "processor_unavailable"
+
+
+class SettlementFileNotReadyError(PayzenoLedgerError):
+    """The acquirer has no file for that date (and currency) yet — ``404 file_not_ready``.
+
+    Deliberately **not** an :class:`UpstreamError`. It is a normal answer to "is it there
+    yet?", asked once per acquirer, date and currency every hour, and the circuit breaker
+    records every ``UpstreamError`` as a failure: counted as one, a quiet currency would
+    open the circuit on the acquirer's settlement endpoint for everyone.
+    """
+
+    code: ClassVar[str] = "not_found"
+    http_status: ClassVar[int] = 404
+
+
+class FxRateUnavailableError(UpstreamError):
+    """The FX provider could not be reached or sent something that is not a rate table.
+
+    A converted payout is refused rather than priced on a stale or guessed rate. Nothing
+    has been written when this is raised: the rate is fetched before the payout's lock,
+    balance read and postings.
+    """
+
+    code: ClassVar[str] = "internal_error"
+    http_status: ClassVar[int] = 503
 
 
 class BusPublishError(UpstreamError):

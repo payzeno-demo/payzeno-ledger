@@ -15,6 +15,7 @@ would put staff-only shapes in the merchant SDK.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -97,10 +98,12 @@ __all__ = [
     # ---- ledger-internal only ----
     "AccountListResponse",
     "ApproveAdjustmentRequest",
+    "BalanceListResponse",
     "BootstrapAccountsRequest",
     "BulkPostTransactionRequest",
     "BulkPostTransactionResponse",
     "FreezeAccountRequest",
+    "JobRunResponse",
     "LegacySettlementRecord",
     "ManualMatchRequest",
     "MarkPayoutFailedRequest",
@@ -115,6 +118,9 @@ __all__ = [
     "StageInvoiceLinesRequest",
     "StageInvoiceLinesResponse",
     "StagedInvoiceLinesResponse",
+    # ---- helpers ----
+    "contract_page",
+    "contract_payload",
 ]
 
 
@@ -141,6 +147,29 @@ class AccountListResponse(BaseModel):
     """``GET /internal/v1/accounts``. Unpaginated — a merchant has at most a dozen."""
 
     data: list[Account]
+
+
+class BalanceListResponse(BaseModel):
+    """``GET /internal/v1/balances/{merchant}`` without ``?currency=``: one per currency.
+
+    Unpaginated for the same reason as :class:`AccountListResponse` — five currencies at
+    most. The same envelope, so a caller reads both with one helper.
+    """
+
+    data: list[Balance]
+
+
+class JobRunResponse(BaseModel):
+    """``POST /internal/v1/ops/jobs/{name}/run`` — the job's ``JobResult``, verbatim.
+
+    ``error`` is set when the tick failed; the HTTP status is still 200, because the
+    request (run the job once) succeeded and the job's own failure is the answer.
+    """
+
+    name: str
+    items_processed: int
+    duration_ms: int
+    error: str | None
 
 
 class ReverseTransactionRequest(BaseModel):
@@ -295,3 +324,44 @@ class SettlementImportResponse(BaseModel):
 ItemStatusFilter = Literal[
     "pending", "settling", "retryable", "settled", "failed", "orphaned", "needs_review"
 ]
+
+
+def contract_payload(model: type[BaseModel], values: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a router's values onto exactly one contract model's wire fields.
+
+    The contract models forbid extra keys and type every date and timestamp as ``str``, so
+    FastAPI's response validation answers 500 for a column the contract does not carry or
+    for a raw ``datetime``. This keeps the model's fields under their wire names
+    (``object``, not ``object_``), drops everything else, and renders dates and datetimes
+    as ISO-8601. A field the router did not supply is left out, so a genuinely missing
+    value still fails validation rather than being invented here.
+    """
+    payload: dict[str, Any] = {}
+    for name, field in model.model_fields.items():
+        wire = field.alias or name
+        if wire in values:
+            payload[wire] = _wire_value(values[wire])
+    return payload
+
+
+def contract_page(
+    model: type[BaseModel],
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    has_more: bool,
+    next_cursor: str | None,
+) -> dict[str, Any]:
+    """A ``Paginated`` body: ``data``, ``next_cursor``, ``has_more`` and nothing else."""
+    return {
+        "data": [contract_payload(model, row) for row in rows],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
+
+
+def _wire_value(value: Any) -> Any:
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_wire_value(item) for item in value]
+    return value

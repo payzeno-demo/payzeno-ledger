@@ -137,8 +137,8 @@ async def test_every_strategy_declares_its_method_name() -> None:
     }
     assert methods == {
         "exact_reference",
-        "network_transaction",
-        "heuristic_amount_window",
+        "network_txn",
+        "heuristic",
         "manual",
     }
     for strategy in (

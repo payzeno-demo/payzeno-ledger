@@ -135,11 +135,24 @@ class StubBacklog:
         self.payload = payload
         self.calls: list[tuple[str | None, str | None]] = []
 
-    async def get_backlog(
+    async def summary(
         self, *, currency: str | None = None, batch_id: str | None = None
     ) -> dict[str, Any]:
         self.calls.append((currency, batch_id))
         return self.payload
+
+
+def _backlog(retryable: int) -> dict[str, Any]:
+    """A `ReconciliationBacklog` contract body."""
+    return {
+        "object": "reconciliation_backlog",
+        "retryable": retryable,
+        "failed": 0,
+        "orphaned": 0,
+        "needs_review": 0,
+        "variance_exceeded": 0,
+        "oldest_retryable_at": None,
+    }
 
 
 def _run(batch_id: str = "sb_QK", status: str = "running") -> Any:
@@ -439,21 +452,21 @@ async def test_get_run_reads_in_one_session(sessions_factory) -> None:
 
 
 async def test_backlog_passes_its_filters_through() -> None:
-    backlog = StubBacklog({"total_items": 4_113, "buckets": [], "stale_batches": 2})
+    backlog = StubBacklog(_backlog(4_113))
 
     payload = await get_backlog(backlog, "USD", "sb_QK")
 
-    assert payload["total_items"] == 4_113
+    assert payload["retryable"] == 4_113
     assert backlog.calls == [("USD", "sb_QK")]
 
 
 async def test_backlog_with_no_filters_returns_everything() -> None:
     """The ops dashboard tile. On the night of PAY-2041 it read 4,113."""
-    backlog = StubBacklog({"total_items": 0, "buckets": [], "stale_batches": 0})
+    backlog = StubBacklog(_backlog(0))
 
     payload = await get_backlog(backlog)
 
-    assert payload["total_items"] == 0
+    assert payload == _backlog(0)
     assert backlog.calls == [(None, None)]
 
 
@@ -463,9 +476,9 @@ async def test_the_backlog_route_touches_no_session() -> None:
     `BacklogService` owns its own read; giving the route a session as well would double
     the connection cost of the one screen people refresh most.
     """
-    backlog = StubBacklog({"total_items": 12, "buckets": [], "stale_batches": 0})
+    backlog = StubBacklog(_backlog(12))
 
     payload = await get_backlog(backlog, None, "sb_QK")
 
-    assert payload["total_items"] == 12
+    assert payload["retryable"] == 12
     assert backlog.calls == [(None, "sb_QK")]
