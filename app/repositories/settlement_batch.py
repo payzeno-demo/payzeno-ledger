@@ -11,12 +11,13 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, ClassVar
 
-from sqlalchemy import ColumnElement, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import BatchNotFoundError
+from app.models.reconciliation_item import ReconciliationItem
 from app.models.settlement_batch import SettlementBatch
-from app.repositories.base import BaseRepository
+from app.repositories.base import BaseRepository, Page
 
 #: Statuses the sweep will pick a batch up from. ``partially_reconciled`` is in here on
 #: purpose: it is the state that keeps a retry backlog alive, it is normal, and it is the
@@ -32,6 +33,31 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
 
     def _default_order(self) -> ColumnElement[Any]:
         return SettlementBatch.id
+
+    async def list_page(
+        self,
+        session: AsyncSession,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        merchant_id: str | None = None,
+        **filters: Any,
+    ) -> Page[SettlementBatch]:
+        """Keyset page of batches; ``merchant_id`` narrows to batches holding their items.
+
+        A batch has no merchant — one acquirer file carries many — so it is not a column
+        filter. payzeno-api always sends it for the merchant's settlement list.
+        """
+        where = []
+        if merchant_id is not None:
+            where.append(
+                SettlementBatch.id.in_(
+                    select(ReconciliationItem.batch_id)
+                    .where(ReconciliationItem.merchant_id == merchant_id)
+                    .distinct()
+                )
+            )
+        return await super().list_page(session, cursor=cursor, limit=limit, where=where, **filters)
 
     async def find_by_file(
         self, session: AsyncSession, *, acquirer: str, file_reference: str
@@ -49,6 +75,19 @@ class SettlementBatchRepository(BaseRepository[SettlementBatch]):
             .where(SettlementBatch.file_reference == file_reference)
         )
         return (await session.execute(stmt)).scalars().first()
+
+    async def latest_processing_date(
+        self, session: AsyncSession, *, acquirer: str
+    ) -> dt.date | None:
+        """The newest processing date any batch from this acquirer was opened for.
+
+        ``SettlementImportJob`` walks forward from here after the clock has jumped, so a
+        gap longer than its three-day lookback is caught up rather than skipped.
+        """
+        stmt = select(func.max(SettlementBatch.processing_date)).where(
+            SettlementBatch.acquirer == acquirer
+        )
+        return (await session.execute(stmt)).scalar_one_or_none()
 
     async def list_by_status(
         self, session: AsyncSession, statuses: tuple[str, ...]

@@ -8,7 +8,9 @@ create is money the ledger will never notice is missing.
 Two entry points, and they are not equivalent:
 
 * :class:`SettlementImportService` — the modern path. Pulls the file from the acquirer,
-  parses it, opens the batch, matches, closes.
+  parses it, opens the batch, matches, closes. Since RFC platform-v2 §7 it asks for one
+  currency at a time (``?date=&currency=``) and opens one batch per acquirer, date and
+  currency, ``file_reference = "{acquirer}-{date}-{currency}"``.
 * :meth:`SettlementService.import_legacy_records` — the ``POST /internal/v1/settlement-imports``
   route payzeno-billing-legacy's ``LedgerReconciliationExportJob`` pushes to. It predates
   the import service and duplicates a chunk of its matching, because when it was written
@@ -18,7 +20,7 @@ Two entry points, and they are not equivalent:
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Sequence
+from typing import Any, Final, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +37,18 @@ from app.services.reconciliation.matcher import MatchStrategy, match_items
 from app.services.settlement_parser import ParsedSettlementLine, parser_for
 
 logger = get_logger(__name__)
+
+#: How many days either side of a file's processing date the importer looks for a line
+#: some other file from the same acquirer already carried. A week covers an acquirer
+#: re-filing a line a few days late and the switch from one mixed file a day to one file
+#: per currency, which is when the same line can arrive under two references.
+DUPLICATE_LINE_WINDOW_DAYS: Final[int] = 7
+
+
+def file_reference_for(acquirer: str, processing_date: date, currency: str | None = None) -> str:
+    """The batch's ``file_reference``: per currency since RFC platform-v2, per day before."""
+    base = f"{acquirer}-{processing_date.isoformat()}"
+    return base if currency is None else f"{base}-{currency}"
 
 
 class SettlementService:
@@ -92,6 +106,36 @@ class SettlementService:
         await self._batches.add(session, batch)
         logger.info("settlement_batch_opened", batch_id=batch.id, acquirer=acquirer)
         return batch
+
+    async def find_imported_batch(
+        self,
+        session: AsyncSession,
+        *,
+        acquirer: str,
+        processing_date: date,
+        currency: str,
+    ) -> SettlementBatch | None:
+        """The batch an earlier import opened for this acquirer, date and currency.
+
+        Looks under the per-currency reference first and then under the per-day reference
+        files had before the acquirers split them by currency — a day imported before the
+        switch is imported, and fetching it again per currency would open a second batch
+        of the same money.
+        """
+        for reference in (
+            file_reference_for(acquirer, processing_date, currency),
+            file_reference_for(acquirer, processing_date),
+        ):
+            batch = await self._batches.find_by_file(
+                session, acquirer=acquirer, file_reference=reference
+            )
+            if batch is not None and batch.currency == currency:
+                return batch
+        return None
+
+    async def latest_processing_date(self, session: AsyncSession, acquirer: str) -> date | None:
+        """The newest processing date this acquirer has a batch for, if any."""
+        return await self._batches.latest_processing_date(session, acquirer=acquirer)
 
     async def close_batch(self, session: AsyncSession, batch_id: str) -> SettlementBatch:
         """Close an ``open`` batch and emit ``settlement.batch_closed``."""
@@ -163,9 +207,21 @@ class SettlementService:
             processing_date=processing_date,
             file_reference=file_reference,
         )
+        if batch.status != "open":
+            # A re-push of a file whose batch has already closed. Nothing to add.
+            logger.info(
+                "legacy_settlement_import_skipped",
+                batch_id=batch.id,
+                status=batch.status,
+                file_reference=file_reference,
+            )
+            return batch.id, 0
+        existing = await self._items.acquirer_references_for_batch(session, batch.id)
 
         items: list[ReconciliationItem] = []
         for record in records:
+            if str(record["acquirer_reference"]) in existing:
+                continue
             items.append(
                 ReconciliationItem(
                     id=new_id("ri"),
@@ -180,6 +236,7 @@ class SettlementService:
                     net_minor=int(record.get("net_minor", 0)),
                     currency=str(record.get("currency", currency)).upper(),
                     livemode=batch.livemode,
+                    acquirer=batch.acquirer,
                     acquirer_reference=str(record["acquirer_reference"]),
                     network_reference=record.get("network_reference"),
                     status="pending",
@@ -224,30 +281,106 @@ class SettlementImportService:
         self._strategies = strategies
         self._clock = clock
 
-    async def import_file(self, acquirer: str, processing_date: date) -> SettlementBatch:
+    async def latest_processing_date(self, acquirer: str) -> date | None:
+        """Where ``SettlementImportJob`` resumes its walk after the clock jumped forward."""
+        async with self._sessions.begin() as session:
+            return await self._settlements.latest_processing_date(session, acquirer)
+
+    async def import_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> SettlementBatch | None:
+        """Import one acquirer file; with ``currency``, that currency's file only.
+
+        Returns the batch — the existing one when the file was imported before — or
+        ``None`` when the per-currency file has no lines for the currency, which is the
+        normal answer for most currencies on most days and opens no batch.
+
+        Raises :class:`~app.errors.SettlementFileNotReadyError` when the acquirer has not
+        published the file yet, and the acquirer's own errors otherwise.
+        """
+        if currency is not None:
+            async with self._sessions.begin() as session:
+                done = await self._settlements.find_imported_batch(
+                    session,
+                    acquirer=acquirer,
+                    processing_date=processing_date,
+                    currency=currency,
+                )
+            if done is not None and done.status != "open":
+                # The hourly job re-walks its window, so most calls land here — and
+                # without a round trip to the acquirer.
+                return done
+
         raw = await self._processor.fetch_settlement_file(
-            acquirer=acquirer, processing_date=processing_date
+            acquirer=acquirer, processing_date=processing_date, currency=currency
         )
         parsed = parser_for(acquirer).parse(raw)
+        if currency is not None:
+            foreign = sum(1 for line in parsed if line.currency != currency)
+            if foreign:
+                # An acquirer that ignored ?currency= sent the whole day. The other
+                # currencies' lines are not lost: each is picked up by its own request.
+                logger.info(
+                    "settlement_file_other_currency_lines",
+                    acquirer=acquirer,
+                    processing_date=processing_date.isoformat(),
+                    currency=currency,
+                    skipped=foreign,
+                )
+            parsed = [line for line in parsed if line.currency == currency]
         if not parsed:
-            logger.warning(
+            logger.info(
                 "settlement_file_empty",
                 acquirer=acquirer,
                 processing_date=processing_date.isoformat(),
+                currency=currency,
             )
+            if currency is not None:
+                return None
 
-        file_reference = f"{acquirer}-{processing_date.isoformat()}"
-        currency = parsed[0].currency if parsed else "USD"
+        file_reference = file_reference_for(acquirer, processing_date, currency)
+        batch_currency = currency or (parsed[0].currency if parsed else "USD")
 
         async with self._sessions.begin() as session:
             batch = await self._settlements.open_batch(
                 session,
                 acquirer=acquirer,
-                currency=currency,
+                currency=batch_currency,
                 processing_date=processing_date,
                 file_reference=file_reference,
             )
-            items = self._build_items(batch, parsed)
+            if batch.status != "open":
+                logger.info(
+                    "settlement_file_already_imported",
+                    batch_id=batch.id,
+                    acquirer=acquirer,
+                    status=batch.status,
+                )
+                return batch
+            # An open batch with items is an import that stopped before closing. Add only
+            # the lines it does not have yet, then close it.
+            existing = await self._items.acquirer_references_for_batch(session, batch.id)
+            new_lines = [line for line in parsed if line.acquirer_reference not in existing]
+            if currency is not None and new_lines:
+                filed = await self._items.acquirer_references_already_filed(
+                    session,
+                    acquirer=acquirer,
+                    currency=currency,
+                    around=processing_date,
+                    window_days=DUPLICATE_LINE_WINDOW_DAYS,
+                    references=[line.acquirer_reference for line in new_lines],
+                )
+                if filed:
+                    logger.warning(
+                        "settlement_lines_already_filed",
+                        batch_id=batch.id,
+                        acquirer=acquirer,
+                        currency=currency,
+                        skipped=len(filed),
+                    )
+                    metrics.increment("SettlementLineAlreadyFiled", acquirer=acquirer)
+                    new_lines = [line for line in new_lines if line.acquirer_reference not in filed]
+            items = self._build_items(batch, new_lines)
             await self._items.add_all(session, items)
             await match_items(session, items, self._strategies, clock=self._clock)
             batch_id = batch.id
@@ -260,6 +393,7 @@ class SettlementImportService:
             "settlement_file_imported",
             batch_id=batch_id,
             acquirer=acquirer,
+            currency=batch_currency,
             item_count=len(parsed),
         )
         return batch
@@ -282,6 +416,7 @@ class SettlementImportService:
                 net_minor=line.net_minor,
                 currency=line.currency,
                 livemode=batch.livemode,
+                acquirer=batch.acquirer,
                 acquirer_reference=line.acquirer_reference,
                 network_reference=line.network_reference,
                 status="pending",

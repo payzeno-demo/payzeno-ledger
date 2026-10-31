@@ -26,6 +26,7 @@ import pytest
 from app.errors import (
     BatchNotReconcilableError,
     ProcessorUnavailableError,
+    SettlementFileNotReadyError,
     ValidationError,
 )
 from app.services.reconciliation.matcher import ExactReferenceMatch
@@ -34,7 +35,11 @@ from app.services.settlement_parser import (
     WorldflowCsvParser,
     parser_for,
 )
-from app.services.settlements import SettlementImportService, SettlementService
+from app.services.settlements import (
+    SettlementImportService,
+    SettlementService,
+    file_reference_for,
+)
 from tests.doubles import CollectingPublisher, FrozenClock
 from tests.factories import make_batch
 
@@ -54,10 +59,15 @@ class StubProcessor:
     def __init__(self, payload: bytes | None = None, raises: Exception | None = None) -> None:
         self.payload = payload if payload is not None else CSV_FILE
         self.raises = raises
-        self.fetches: list[tuple[str, date]] = []
+        self.fetches: list[tuple[Any, ...]] = []
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
-        self.fetches.append((acquirer, processing_date))
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
+        if currency is None:
+            self.fetches.append((acquirer, processing_date))
+        else:
+            self.fetches.append((acquirer, processing_date, currency))
         if self.raises is not None:
             raise self.raises
         return self.payload
@@ -102,6 +112,18 @@ class RecordingSettlementService(SettlementService):
         self.by_file[file_reference] = batch.id
         return batch
 
+    async def find_imported_batch(
+        self, session: Any, *, acquirer: str, processing_date: date, currency: str
+    ) -> Any | None:
+        for reference in (
+            file_reference_for(acquirer, processing_date, currency),
+            file_reference_for(acquirer, processing_date),
+        ):
+            batch_id = self.by_file.get(reference)
+            if batch_id is not None and self.batches[batch_id].currency == currency:
+                return self.batches[batch_id]
+        return None
+
     async def close_batch(self, session: Any, batch_id: str) -> Any:
         batch = self.batches[batch_id]
         if batch.status != "open":
@@ -114,8 +136,25 @@ class RecordingSettlementService(SettlementService):
 
 
 class CollectingItemRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, filed_elsewhere: set[str] | None = None) -> None:
         self.added: list[Any] = []
+        self.filed_elsewhere = filed_elsewhere or set()
+        self.filed_queries: list[dict[str, Any]] = []
+
+    async def acquirer_references_already_filed(
+        self,
+        session: Any,
+        *,
+        acquirer: str,
+        currency: str,
+        around: date,
+        window_days: int,
+        references: list[str],
+    ) -> set[str]:
+        self.filed_queries.append(
+            {"acquirer": acquirer, "currency": currency, "around": around, "refs": references}
+        )
+        return {ref for ref in references if ref in self.filed_elsewhere}
 
     async def add_all(self, session: Any, objs: list[Any]) -> list[Any]:
         self.added.extend(objs)
@@ -125,6 +164,9 @@ class CollectingItemRepository:
         self.added.append(obj)
         return obj
 
+    async def acquirer_references_for_batch(self, session: Any, batch_id: str) -> set[str]:
+        return {item.acquirer_reference for item in self.added if item.batch_id == batch_id}
+
 
 class NullChargeRepository:
     async def find_by_processor_reference(
@@ -133,9 +175,9 @@ class NullChargeRepository:
         return None
 
 
-def _importer(sessions_factory, processor: StubProcessor):
+def _importer(sessions_factory, processor: StubProcessor, items: Any = None):
     settlements = RecordingSettlementService()
-    items = CollectingItemRepository()
+    items = items if items is not None else CollectingItemRepository()
     service = SettlementImportService(
         sessions=sessions_factory,
         processor=processor,
@@ -232,6 +274,123 @@ async def test_import_file_rejects_a_file_with_no_header(sessions_factory) -> No
     with pytest.raises(ValidationError):
         await service.import_file("worldflow", PROCESSING_DATE)
 
+    assert items.added == []
+
+
+# --------------------------------------------------------------------------------------
+# per currency — RFC platform-v2 §7: one file, one batch, per acquirer, date and currency
+# --------------------------------------------------------------------------------------
+
+MIXED_FILE = (
+    b"acquirer_reference,network_reference,line_type,gross_minor,fee_minor,"
+    b"interchange_minor,scheme_fee_minor,net_minor,currency\n"
+    b"WF-4001,NTX-4001,SL,10000,290,210,80,9710,USD\n"
+    b"WF-4002,NTX-4002,SL,8000,40,24,8,7960,EUR\n"
+    b"WF-4003,NTX-4003,SL,5000,25,15,5,4975,EUR\n"
+)
+
+
+async def test_a_currency_import_asks_for_that_currency(sessions_factory) -> None:
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, _, _ = _importer(sessions_factory, processor)
+
+    await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+
+    assert processor.fetches == [("worldflow", PROCESSING_DATE, "EUR")]
+
+
+async def test_a_currency_import_opens_a_batch_for_that_currency_only(sessions_factory) -> None:
+    """An acquirer that ignores `?currency=` still cannot put USD lines in a EUR batch."""
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, settlements, items = _importer(sessions_factory, processor)
+
+    batch = await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+
+    assert batch.currency == "EUR"
+    assert batch.file_reference == "worldflow-2026-04-15-EUR"
+    assert batch.status == "closed"
+    assert {row.acquirer_reference for row in items.added} == {"WF-4002", "WF-4003"}
+    assert {row.currency for row in items.added} == {"EUR"}
+
+
+async def test_one_batch_per_currency_for_the_same_day(sessions_factory) -> None:
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, settlements, _ = _importer(sessions_factory, processor)
+
+    usd = await service.import_file("worldflow", PROCESSING_DATE, "USD")
+    eur = await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+
+    assert usd.id != eur.id
+    assert sorted(settlements.by_file) == ["worldflow-2026-04-15-EUR", "worldflow-2026-04-15-USD"]
+
+
+async def test_a_currency_with_no_lines_opens_no_batch(sessions_factory) -> None:
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, settlements, items = _importer(sessions_factory, processor)
+
+    batch = await service.import_file("worldflow", PROCESSING_DATE, "JPY")
+
+    assert batch is None
+    assert settlements.batches == {}
+    assert items.added == []
+
+
+async def test_an_imported_currency_is_not_fetched_again(sessions_factory) -> None:
+    """Every hour re-walks the window; a closed batch answers without the acquirer."""
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, _, _ = _importer(sessions_factory, processor)
+
+    first = await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+    second = await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+
+    assert second.id == first.id
+    assert processor.fetches == [("worldflow", PROCESSING_DATE, "EUR")]
+
+
+async def test_a_day_imported_before_the_split_counts_as_imported(sessions_factory) -> None:
+    """The per-day batch from before RFC platform-v2 is that day's file for its currency."""
+    processor = StubProcessor(payload=MIXED_FILE)
+    service, settlements, _ = _importer(sessions_factory, processor)
+    legacy = await settlements.open_batch(
+        object(),
+        acquirer="worldflow",
+        currency="USD",
+        processing_date=PROCESSING_DATE,
+        file_reference="worldflow-2026-04-15",
+    )
+    legacy.status = "reconciled"
+
+    batch = await service.import_file("worldflow", PROCESSING_DATE, "USD")
+
+    assert batch.id == legacy.id
+    assert processor.fetches == []
+
+
+async def test_a_line_another_file_already_carried_is_not_imported_twice(
+    sessions_factory,
+) -> None:
+    """Two files, one line: a second item would be a second `settle` posting (PAY-2041)."""
+    processor = StubProcessor(payload=MIXED_FILE)
+    items = CollectingItemRepository(filed_elsewhere={"WF-4002"})
+    service, _, _ = _importer(sessions_factory, processor, items)
+
+    await service.import_file("worldflow", PROCESSING_DATE, "EUR")
+
+    assert {row.acquirer_reference for row in items.added} == {"WF-4003"}
+    assert items.filed_queries[0]["currency"] == "EUR"
+    assert items.filed_queries[0]["around"] == PROCESSING_DATE
+
+
+async def test_a_currency_file_not_ready_propagates_and_writes_nothing(
+    sessions_factory,
+) -> None:
+    processor = StubProcessor(raises=SettlementFileNotReadyError("file_not_ready"))
+    service, settlements, items = _importer(sessions_factory, processor)
+
+    with pytest.raises(SettlementFileNotReadyError):
+        await service.import_file("worldflow", PROCESSING_DATE, "GBP")
+
+    assert settlements.batches == {}
     assert items.added == []
 
 

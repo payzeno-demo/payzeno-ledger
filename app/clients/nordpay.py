@@ -90,11 +90,10 @@ class NordpayClient(ProcessorClient):
             state = "unknown"
         return CaptureStatus(state=state, reference=body.get("reference"))
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
-        response = await self._http.get(
-            "/v2/settlement-files", params={"date": processing_date.isoformat()}
-        )
-        return response.content
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
+        return await self._http.get_settlement_file(processing_date, currency)
 
     async def health_check(self) -> bool:
         try:

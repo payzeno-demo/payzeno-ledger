@@ -7,7 +7,7 @@ which is what the ledger needs to record.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import time, timedelta
 from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +57,7 @@ class SepaPayoutInitiator(PayoutInitiator):
 
         submitted_at = self._clock.now()
         value_date = submitted_at.date()
-        if submitted_at.time() >= self._settings.payout_cutoff_sepa_utc:
+        if submitted_at.time() >= time.fromisoformat(self._settings.payout_cutoff_sepa_utc):
             value_date = self._calendar.next_business_day(
                 value_date, payout.currency, self.method
             )

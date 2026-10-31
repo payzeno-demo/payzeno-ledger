@@ -159,10 +159,13 @@ from app.domain.rules.disputes import (  # noqa: E402
 )
 from app.domain.rules.fees import FeePostingRule, SchemeFeePostingRule  # noqa: E402
 from app.domain.rules.payouts import (  # noqa: E402
+    FxPayoutSourcePostingRule,
+    FxPayoutTargetPostingRule,
     PayoutPostingRule,
     PayoutReversalPostingRule,
     ReserveHoldPostingRule,
     ReserveReleasePostingRule,
+    mirrored,
 )
 from app.domain.rules.sale import (  # noqa: E402
     AuthPostingRule,
@@ -214,6 +217,8 @@ __all__ = [
     "ChargebackReversalPostingRule",
     "DisputePostingRule",
     "FeePostingRule",
+    "FxPayoutSourcePostingRule",
+    "FxPayoutTargetPostingRule",
     "PayoutPostingRule",
     "PayoutReversalPostingRule",
     "PostingContext",
@@ -229,4 +234,5 @@ __all__ = [
     "SettlementRefundPostingRule",
     "credit",
     "debit",
+    "mirrored",
 ]

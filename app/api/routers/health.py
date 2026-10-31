@@ -27,6 +27,7 @@ the failover that caused it.
 from __future__ import annotations
 
 import time
+from importlib import metadata
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Response, status
@@ -46,10 +47,12 @@ SessionsDep = Annotated[SessionFactory, Depends(get_sessions)]
 
 SERVICE_NAME = "payzeno-ledger"
 
+#: The installed distribution's version — the same `1.0.0` pyproject and `create_app` carry.
+#: Read once at import; `/healthz` answers from memory.
+SERVICE_VERSION = metadata.version(SERVICE_NAME)
+
 #: Anything slower than this and the database is not usable even if it answered.
 READINESS_BUDGET_MS = 1_000
-
-_STARTED_AT = time.monotonic()
 
 
 @router.get(
@@ -58,12 +61,13 @@ _STARTED_AT = time.monotonic()
     summary="Liveness — is the process running",
 )
 async def healthz() -> dict[str, Any]:
-    """Answers from memory. Never touches the database, deliberately."""
-    return {
-        "status": "ok",
-        "service": SERVICE_NAME,
-        "uptime_seconds": int(time.monotonic() - _STARTED_AT),
-    }
+    """Answers from memory. Never touches the database, deliberately.
+
+    Exactly the ``HealthResponse`` contract — ``status``, ``service``, ``version``. The
+    contract model forbids extra keys, so anything else here fails response validation
+    and turns the liveness probe into a 500.
+    """
+    return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
 
 @router.get(
@@ -103,9 +107,5 @@ async def readyz(sessions: SessionsDep, response: Response) -> dict[str, Any]:
     ready = checks["database"] == "ok"
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {
-        "status": "ok" if ready else "degraded",
-        "service": SERVICE_NAME,
-        "checks": checks,
-        "latency_ms": elapsed_ms,
-    }
+    # `ReadinessResponse` is `status` + `checks` and forbids anything else.
+    return {"status": "ok" if ready else "degraded", "checks": checks}

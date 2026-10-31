@@ -81,6 +81,24 @@ class EventOutboxRepository(BaseRepository[EventOutbox]):
         await session.flush()
         return rows
 
+    async def list_unpublished(
+        self, session: AsyncSession, *, limit: int, max_attempts: int = MAX_ATTEMPTS
+    ) -> list[EventOutbox]:
+        """Unpublished events with fewer than ``max_attempts`` failures, oldest first.
+
+        A plain read, no claim. ``OutboxDrainJob`` publishes what this returns and retries
+        a failure on its next tick until its own attempt ceiling; the ops CLI's ``outbox``
+        command passes a high ceiling to see everything still waiting.
+        """
+        stmt = (
+            select(EventOutbox)
+            .where(EventOutbox.published_at.is_(None))
+            .where(EventOutbox.attempt_count < max_attempts)
+            .order_by(EventOutbox.occurred_at)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
     async def mark_published(
         self, session: AsyncSession, event_id: str, *, at: dt.datetime | None = None
     ) -> EventOutbox:

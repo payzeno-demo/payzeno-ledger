@@ -13,7 +13,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.idempotency import ledger_key
+from app.domain.idempotency import ledger_key, sha256_of
 from app.domain.postings import PostingLine
 from app.errors import BatchNotFoundError, ValidationError
 from app.logging import get_logger
@@ -216,13 +216,13 @@ class FundingMatchService:
                     account_type="cash", direction="debit", amount_minor=event.amount_minor
                 ),
                 PostingLine(
-                    account_type="acquirer_receivable",
+                    account_type="processor_clearing",
                     direction="credit",
                     amount_minor=event.amount_minor,
                 ),
             ],
             created_by="system",
-            request_fingerprint=ledger_key("fundingfp", batch.id, event.bank_reference),
+            request_fingerprint=sha256_of(ledger_key("fundingfp", batch.id, event.bank_reference)),
         )
         return posted.transaction.id
 

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.idempotency import ledger_key
+from app.domain.idempotency import ledger_key, sha256_of
 from app.domain.postings import PostingLine
 from app.errors import (
     DualControlRequiredError,
@@ -320,7 +320,7 @@ class AdjustmentService:
             reference_id=record.id,
             lines=posting_lines,
             created_by="admin",
-            request_fingerprint=ledger_key("adjustmentfp", record.id, approved_by),
+            request_fingerprint=sha256_of(ledger_key("adjustmentfp", record.id, approved_by)),
         )
 
         record.approved_by = approved_by

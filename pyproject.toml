@@ -49,9 +49,18 @@ build-backend = "hatchling.build"
 packages = ["app"]
 
 # payzeno-contracts is published to the internal index, everything else to PyPI.
+# `explicit` keeps uv from asking the internal index about every other package.
 [[tool.uv.index]]
 name = "payzeno-internal"
 url = "https://pypi.payzeno.internal/simple"
+explicit = true
+
+# Local and compose builds resolve the contracts from the sibling checkout instead of the
+# internal index, the same way the TypeScript side uses `workspace:*`. The Dockerfile copies
+# ../payzeno-contracts/python in through the `contracts_py` build context so this path
+# resolves inside the image too.
+[tool.uv.sources]
+payzeno-contracts = { path = "../payzeno-contracts/python" }
 
 [tool.uv]
 package = true
@@ -129,6 +138,11 @@ filterwarnings = [
   "error",
   # SQLAlchemy 2.0 emits this from the asyncpg dialect on rollback of a closed conn
   "ignore::DeprecationWarning:asyncpg.*",
+  # python-multipart >= 0.0.13 warns on starlette's `import multipart`; fixed in starlette
+  "ignore:Please use `import python_multipart` instead.:PendingDeprecationWarning",
+  # pytest-asyncio 0.23 on 3.12: the session-scoped `event_loop` override in tests/conftest.py
+  "ignore:The event_loop fixture provided by pytest-asyncio has been redefined:DeprecationWarning",
+  "ignore:There is no current event loop:DeprecationWarning",
 ]
 
 [tool.coverage.run]

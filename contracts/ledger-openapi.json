@@ -206,7 +206,7 @@
         "tags": [
           "balances"
         ],
-        "summary": "Current or point-in-time balance for one merchant and currency",
+        "summary": "Balance for one merchant: one currency, or every currency it holds",
         "operationId": "get_balance",
         "responses": {
           "200": {
@@ -214,7 +214,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Balance"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Balance"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BalanceListResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -713,6 +720,62 @@
             }
           }
         ],
+        "security": [
+          {
+            "InternalSecret": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/ops/jobs/{name}/run": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Run one tick of a periodic job now",
+        "operationId": "run_job",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid X-Payzeno-Internal-Secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
         "security": [
           {
             "InternalSecret": []
@@ -2247,6 +2310,16 @@
         "required": [
           "error"
         ]
+      },
+      "BalanceListResponse": {
+        "type": "object",
+        "title": "BalanceListResponse",
+        "description": "Ledger-internal. {data: Balance[]}, one per currency (RFC platform-v2 \u00a77)."
+      },
+      "JobRunResponse": {
+        "type": "object",
+        "title": "JobRunResponse",
+        "description": "Ledger-internal. The job's JobResult: name, items_processed, duration_ms, error."
       }
     }
   }

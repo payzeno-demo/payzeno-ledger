@@ -22,7 +22,7 @@ from app.logging import get_logger
 from app.ports import Clock, SessionFactory
 from app.repositories.account import AccountRepository
 from app.repositories.balance_cache import MerchantBalanceCacheRepository
-from app.repositories.ledger_entry import LedgerEntryRepository
+from app.repositories.ledger_entry import BUCKET_ACCOUNT_TYPES, LedgerEntryRepository
 
 logger = get_logger(__name__)
 
@@ -92,19 +92,69 @@ class BalanceService:
             # A merchant with no postings yet. Zeroes are the honest answer; inventing
             # a row here would make the audit job's drift check fire on every new
             # merchant.
-            return _empty_balance(merchant_id, currency, livemode, self._clock.now())
+            return _balance(merchant_id, currency, livemode, {}, as_of=self._clock.now())
 
-        return {
-            "merchant_id": merchant_id,
-            "currency": currency,
-            "livemode": livemode,
-            "available_minor": cached.available_minor,
-            "pending_minor": cached.pending_minor,
-            "reserved_minor": cached.reserved_minor,
-            "disputed_minor": cached.disputed_minor,
-            "negative_balance_minor": cached.negative_balance_minor,
-            "as_of": cached.computed_at.isoformat(),
-        }
+        return _balance(
+            merchant_id,
+            currency,
+            livemode,
+            {
+                "merchant_payable": cached.available_minor,
+                "merchant_pending": cached.pending_minor,
+                "merchant_reserve": cached.reserved_minor,
+                "merchant_disputed": cached.disputed_minor,
+            },
+            as_of=cached.computed_at,
+        )
+
+    async def list_balances(
+        self,
+        *,
+        merchant_id: str,
+        livemode: bool,
+        as_of: datetime | None = None,
+    ) -> list[dict[str, object]]:
+        """One ``Balance`` per currency the merchant has ever had a posting in.
+
+        RFC platform-v2 §7: balances are per currency, and a EUR payment lands in the EUR
+        balance with no conversion. Currencies come from ``merchant_balance_cache`` — a row
+        exists from the first posting in a currency — ordered by code. A merchant with no
+        postings at all gets an empty list, not a zero row per supported currency.
+
+        ``as_of`` in the past replays each currency from ``ledger_entry``, as
+        :meth:`get_balance` does for one.
+        """
+        async with self._sessions.begin() as session:
+            rows = await self._balances.list_for_merchant(
+                session, merchant_id=merchant_id, livemode=livemode
+            )
+            if as_of is not None and as_of < self._clock.now():
+                return [
+                    await self._historical_balance(
+                        session,
+                        merchant_id=merchant_id,
+                        currency=row.currency,
+                        livemode=livemode,
+                        as_of=as_of,
+                    )
+                    for row in rows
+                ]
+
+        return [
+            _balance(
+                merchant_id,
+                row.currency,
+                livemode,
+                {
+                    "merchant_payable": row.available_minor,
+                    "merchant_pending": row.pending_minor,
+                    "merchant_reserve": row.reserved_minor,
+                    "merchant_disputed": row.disputed_minor,
+                },
+                as_of=row.computed_at,
+            )
+            for row in rows
+        ]
 
     async def get_balance_history(
         self,
@@ -145,7 +195,12 @@ class BalanceService:
                 livemode=livemode,
             )
             if account is None:
-                return {"merchant_id": merchant_id, "currency": currency, "buckets": []}
+                return {
+                    "merchant_id": merchant_id,
+                    "currency": currency,
+                    "interval": interval,
+                    "points": [],
+                }
 
             rows = await self._entries.sum_by_bucket(
                 session,
@@ -155,15 +210,17 @@ class BalanceService:
                 interval=interval,
             )
 
+        # ``TimeseriesPoint``: the payable balance at the end of each bucket, accumulated
+        # from the start of the window, and how many entries moved it.
         running = 0
-        buckets = []
+        points = []
         for row in rows:
             running += row.delta_minor
-            buckets.append(
+            points.append(
                 {
                     "bucket_start": row.bucket_start.isoformat(),
-                    "delta_minor": row.delta_minor,
-                    "balance_minor": running,
+                    "amount_minor": running,
+                    "count": row.entry_count,
                 }
             )
 
@@ -172,14 +229,13 @@ class BalanceService:
             merchant_id=merchant_id,
             currency=currency,
             interval=interval,
-            buckets=len(buckets),
+            buckets=len(points),
         )
         return {
             "merchant_id": merchant_id,
             "currency": currency,
-            "livemode": livemode,
             "interval": interval,
-            "buckets": buckets,
+            "points": points,
         }
 
     async def _historical_balance(
@@ -198,30 +254,37 @@ class BalanceService:
             livemode=livemode,
             as_of=as_of,
         )
-        return {
-            "merchant_id": merchant_id,
-            "currency": currency,
-            "livemode": livemode,
-            "available_minor": totals.get("merchant_payable", 0),
-            "pending_minor": totals.get("merchant_pending", 0),
-            "reserved_minor": totals.get("merchant_reserve", 0),
-            "disputed_minor": totals.get("merchant_disputed", 0),
-            "negative_balance_minor": min(0, totals.get("merchant_payable", 0)),
-            "as_of": as_of.isoformat(),
-        }
+        return _balance(merchant_id, currency, livemode, totals, as_of=as_of)
 
 
-def _empty_balance(
-    merchant_id: str, currency: str, livemode: bool, now: datetime
+def _balance(
+    merchant_id: str,
+    currency: str,
+    livemode: bool,
+    totals: dict[str, int],
+    *,
+    as_of: datetime,
 ) -> dict[str, object]:
+    """The ``Balance`` contract shape from the four bucket totals.
+
+    ``available_minor`` never goes below zero; a debit balance on ``merchant_payable``
+    is reported as ``negative_balance_minor``, which is what the merchant owes. The
+    ``buckets`` carry each bucket's signed total under its account type.
+    """
+    payable = totals.get("merchant_payable", 0)
     return {
+        "object": "balance",
         "merchant_id": merchant_id,
         "currency": currency,
         "livemode": livemode,
-        "available_minor": 0,
-        "pending_minor": 0,
-        "reserved_minor": 0,
-        "disputed_minor": 0,
-        "negative_balance_minor": 0,
-        "as_of": now.isoformat(),
+        "available_minor": max(0, payable),
+        "pending_minor": totals.get("merchant_pending", 0),
+        "reserved_minor": totals.get("merchant_reserve", 0),
+        "disputed_minor": totals.get("merchant_disputed", 0),
+        "negative_balance_minor": max(0, -payable),
+        "buckets": [
+            {"type": account_type, "amount_minor": totals.get(bucket, 0)}
+            for account_type, bucket in BUCKET_ACCOUNT_TYPES.items()
+        ],
+        "as_of": as_of.isoformat(),
     }

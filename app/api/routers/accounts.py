@@ -29,6 +29,7 @@ from app.api.schemas import (
     BootstrapAccountsRequest,
     BootstrapAccountsResponse,
     FreezeAccountRequest,
+    contract_payload,
 )
 from app.logging import get_logger
 from app.ports import SessionFactory
@@ -53,16 +54,20 @@ def _serialise(account: Any) -> dict[str, Any]:
     generated from TypeScript and the ledger's column names are not guaranteed to keep
     matching it forever. When they diverge, this function is where it is obvious.
     """
-    return {
-        "id": account.id,
-        "object": "account",
-        "merchant_id": account.merchant_id,
-        "type": account.type,
-        "currency": account.currency,
-        "status": account.status,
-        "livemode": account.livemode,
-        "created_at": account.created_at,
-    }
+    return contract_payload(
+        Account,
+        {
+            "id": account.id,
+            "object": "account",
+            "merchant_id": account.merchant_id,
+            "type": account.type,
+            "currency": account.currency,
+            "normal_balance": account.normal_balance,
+            "status": account.status,
+            "livemode": account.livemode,
+            "created_at": account.created_at,
+        },
+    )
 
 
 @router.post(
@@ -107,7 +112,7 @@ async def bootstrap_accounts(
         merchant_id=body.merchant_id,
         currency=body.currency,
         livemode=body.livemode,
-        count=len(payload["accounts"]),
+        count=len(accounts),
         caller=caller,
     )
     return payload

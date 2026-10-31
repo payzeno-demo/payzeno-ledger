@@ -41,6 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from app.services.reconciliation.retry import RetryScheduler
     from app.services.settlements import SettlementService
     from app.services.transactions import LedgerPoster
+    from app.workers.base import PeriodicJob
 
 #: Header the internal caller must send. Checked properly by the middleware; read here
 #: so the handler can attribute the call in an audit row.
@@ -61,7 +62,14 @@ def get_container(request: Request) -> "Container":
     return container
 
 
-ContainerDep = Annotated["Container", Depends(get_container)]
+# FastAPI evaluates parameter annotations at import time, and "Container" only exists under
+# TYPE_CHECKING (see the module docstring for why). Left as a string it stays an unresolved
+# ForwardRef, FastAPI mistakes the parameter for a query field, and every router fails to
+# register. Runtime only needs the Depends marker; mypy still sees the real type.
+if TYPE_CHECKING:  # pragma: no cover
+    ContainerDep = Annotated[Container, Depends(get_container)]
+else:
+    ContainerDep = Annotated[Any, Depends(get_container)]
 
 
 def require_internal_service(request: Request) -> str:
@@ -192,6 +200,19 @@ def get_adjustment_service(container: ContainerDep) -> "AdjustmentService":
 
 def get_manual_match(container: ContainerDep) -> "ManualMatch":
     return _pull(container, "manual_match")
+
+
+def get_jobs(container: ContainerDep) -> "dict[str, PeriodicJob]":
+    """Every wired periodic job by name, for ``POST /internal/v1/ops/jobs/{name}/run``.
+
+    Built from the container's job attributes on each call — the jobs themselves are the
+    container's single instances, so a triggered tick and a scheduled one share state.
+    """
+    # Downward (L7 → L6), but deferred: like the service imports above, this module is
+    # imported by every router and should not drag every job module in with it.
+    from app.workers import jobs_by_name
+
+    return jobs_by_name(container)
 
 
 def get_repositories(container: ContainerDep) -> Any:

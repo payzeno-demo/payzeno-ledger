@@ -21,7 +21,11 @@ from payzeno_contracts.events import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.idempotency import ledger_key
-from app.domain.postings import POSTING_RULE_BY_LINE_TYPE, PostingContext
+from app.domain.postings import (
+    POSTING_RULE_BY_LINE_TYPE,
+    POSTING_RULE_BY_PURPOSE,
+    PostingContext,
+)
 from app.errors import DuplicateDisputeError
 from app.logging import get_logger
 from app.models.projections import SettlementCharge
@@ -80,7 +84,7 @@ async def handle_payment_authorized(
         )
         return
 
-    rule = POSTING_RULE_BY_LINE_TYPE["auth"]
+    rule = POSTING_RULE_BY_PURPOSE["auth"]
     lines = rule.build(
         PostingContext(
             merchant_id=data["merchant_id"],
@@ -139,7 +143,7 @@ async def handle_payment_captured(
     charge.captured_at = _parse(data["captured_at"])
     charge.updated_at = clock.now()
 
-    rule = POSTING_RULE_BY_LINE_TYPE["capture"]
+    rule = POSTING_RULE_BY_PURPOSE["capture"]
     lines = rule.build(
         PostingContext(
             merchant_id=data["merchant_id"],
@@ -184,7 +188,7 @@ async def handle_payment_canceled(
     if charge_id is None:
         # An intent cancelled before any charge existed has nothing to release.
         return
-    rule = POSTING_RULE_BY_LINE_TYPE["auth_release"]
+    rule = POSTING_RULE_BY_PURPOSE["auth_release"]
     lines = rule.build(
         PostingContext(
             merchant_id=payload["merchant_id"],
@@ -292,7 +296,7 @@ async def handle_dispute_opened(
             existing_transaction_id=existing.id,
         )
 
-    rule = POSTING_RULE_BY_LINE_TYPE["dispute"]
+    rule = POSTING_RULE_BY_PURPOSE["dispute"]
     lines = rule.build(
         PostingContext(
             merchant_id=data["merchant_id"],
@@ -365,7 +369,7 @@ async def handle_dispute_closed(
     await ledger.post(
         session,
         idempotency_key=ledger_key("disputewon", payload["merchant_id"], payload["dispute_id"]),
-        purpose="dispute_reversal",
+        purpose=rule.purpose,
         merchant_id=payload["merchant_id"],
         currency=payload["currency"],
         livemode=livemode,

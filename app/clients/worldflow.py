@@ -109,15 +109,14 @@ class WorldflowClient(ProcessorClient):
             state = "unknown"
         return CaptureStatus(state=state, reference=body.get("reference"))
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
-        """Download the raw settlement file for a processing date.
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
+        """Download the raw settlement file for a processing date (and currency).
 
         Worldflow files are CSV; ``WorldflowCsvParser`` owns the format.
         """
-        response = await self._http.get(
-            "/v2/settlement-files", params={"date": processing_date.isoformat()}
-        )
-        return response.content
+        return await self._http.get_settlement_file(processing_date, currency)
 
     async def health_check(self) -> bool:
         """Breaker probe. Never raises — a probe that raises re-opens the circuit."""

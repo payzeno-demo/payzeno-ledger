@@ -1,6 +1,6 @@
 """`PeriodicJob` and `register_jobs()` — app/workers/base.py, app/workers/__init__.py.
 
-Eleven jobs. Two of them collide in PAY-2041 and the collision is a function of their
+Twelve jobs. Two of them collide in PAY-2041 and the collision is a function of their
 intervals, so the intervals are asserted here by name rather than left to whoever edits
 `Settings` next.
 
@@ -17,12 +17,14 @@ stops existing. That is asserted below too.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 import pytest
 
-from app.workers import register_jobs
-from app.workers.base import JobResult, PeriodicJob
+from app.workers import JOB_ATTRIBUTES, jobs_by_name, register_jobs
+from app.workers.base import CatchUpIntervalTrigger, JobResult, PeriodicJob
 from app.workers.batch_close import BatchCloseJob
 from app.workers.deferred_capture import DeferredCaptureJob
 from app.workers.funding_match import FundingMatchJob
@@ -30,6 +32,7 @@ from app.workers.ledger_audit import LedgerAuditJob
 from app.workers.negative_balance import NegativeBalanceJob
 from app.workers.outbox_drain import OutboxDrainJob
 from app.workers.payout_scheduler import PayoutSchedulerJob
+from app.workers.payout_sweep import PayoutSweepJob
 from app.workers.reconcile_sweep import ReconciliationSweepJob
 from app.workers.reserve_release import ReserveReleaseJob
 from app.workers.retry_drain import RetryDrainJob
@@ -49,6 +52,7 @@ ALL_JOBS = [
     LedgerAuditJob,
     OutboxDrainJob,
     BatchCloseJob,
+    PayoutSweepJob,
 ]
 
 
@@ -61,6 +65,29 @@ class RecordingScheduler:
     def add_job(self, func: Any, **kwargs: Any) -> Any:
         self.jobs.append({"func": func, **kwargs})
         return kwargs.get("id")
+
+
+class SlowJob(PeriodicJob):
+    """Records how many of its own ticks overlap."""
+
+    name: ClassVar[str] = "slow"
+
+    def __init__(self) -> None:
+        self.running = 0
+        self.max_concurrent = 0
+        self.runs = 0
+
+    @property
+    def interval_seconds(self) -> int:
+        return 60
+
+    async def run_once(self) -> JobResult:
+        self.running += 1
+        self.max_concurrent = max(self.max_concurrent, self.running)
+        await asyncio.sleep(0.01)
+        self.running -= 1
+        self.runs += 1
+        return JobResult(name=self.name, items_processed=1, duration_ms=10, error=None)
 
 
 class CountingJob(PeriodicJob):
@@ -96,7 +123,8 @@ async def test_every_job_declares_a_unique_name() -> None:
     names = [job.name for job in ALL_JOBS]
 
     assert len(names) == len(set(names)), f"duplicate job name in {names}"
-    assert len(names) == 11
+    assert len(names) == 12
+    assert len(JOB_ATTRIBUTES) == 12
 
 
 async def test_every_job_subclasses_the_base() -> None:
@@ -115,6 +143,76 @@ async def test_start_registers_with_the_interval_from_settings() -> None:
     assert registered["id"] == "counting"
     assert registered["max_instances"] == 1
     assert registered["coalesce"] is True
+
+
+async def test_a_late_tick_still_runs_once_after_the_clock_jumps() -> None:
+    """Simulated time (RFC platform-v2 §10) advances days at a time.
+
+    APScheduler's default `misfire_grace_time` is one second: a tick more than a second
+    late is *dropped*, and an hourly job then idles until its next slot. `None` makes the
+    late tick run; `coalesce=True` makes however many were missed run once.
+    """
+    job = CountingJob(interval=3600)
+    scheduler = RecordingScheduler()
+
+    await job.start(scheduler)
+
+    registered = scheduler.jobs[0]
+    assert registered["misfire_grace_time"] is None
+    assert registered["coalesce"] is True
+    assert isinstance(registered["trigger"], CatchUpIntervalTrigger)
+
+
+async def test_the_catch_up_trigger_resumes_from_now_in_one_step() -> None:
+    """Thirty days behind a 5-second interval is one step, not 518,400."""
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    trigger = CatchUpIntervalTrigger(seconds=5, start_date=start, timezone=UTC)
+    now = start + timedelta(days=30, seconds=2)
+
+    following = trigger.get_next_fire_time(start, now)
+
+    assert now <= following < now + timedelta(seconds=5)
+
+
+async def test_the_catch_up_trigger_is_an_ordinary_interval_when_on_time() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    trigger = CatchUpIntervalTrigger(seconds=60, start_date=start, timezone=UTC)
+    previous = start + timedelta(minutes=10)
+
+    assert trigger.get_next_fire_time(previous, previous + timedelta(seconds=1)) == (
+        previous + timedelta(seconds=60)
+    )
+
+
+async def test_run_now_is_one_tick_through_the_same_wrapper() -> None:
+    """`POST /internal/v1/ops/jobs/{name}/run` — a failing job answers, it does not raise."""
+    ok = CountingJob()
+    failing = CountingJob(raises=RuntimeError("acquirer exploded"))
+
+    assert (await ok.run_now()).items_processed == 1
+    result = await failing.run_now()
+    assert result.error is not None and "acquirer exploded" in result.error
+
+
+async def test_run_now_waits_for_a_tick_already_in_progress() -> None:
+    job = SlowJob()
+
+    await asyncio.gather(job._tick(), job.run_now())  # noqa: SLF001
+
+    assert job.max_concurrent == 1
+    assert job.runs == 2
+
+
+async def test_jobs_by_name_resolves_every_wired_job() -> None:
+    container = type("Container", (), {})()
+    for attribute in JOB_ATTRIBUTES:
+        job_cls = type(attribute, (CountingJob,), {"name": attribute.removesuffix("_job")})
+        setattr(container, attribute, job_cls())
+    container.not_a_job = object()
+
+    jobs = jobs_by_name(container)
+
+    assert set(jobs) == {attribute.removesuffix("_job") for attribute in JOB_ATTRIBUTES}
 
 
 async def test_a_zero_interval_disables_the_job_without_a_redeploy() -> None:

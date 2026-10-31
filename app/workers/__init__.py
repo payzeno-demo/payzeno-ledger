@@ -1,4 +1,4 @@
-"""The eleven APScheduler jobs, and the function that registers them.
+"""The twelve APScheduler jobs, and the function that registers them.
 
 Every ledger task runs every enabled job. Production runs **four** tasks, so there are
 four unsynchronised copies of each job, and every job in this package has to be safe
@@ -33,6 +33,7 @@ from app.workers.ledger_audit import LedgerAuditJob
 from app.workers.negative_balance import NegativeBalanceJob
 from app.workers.outbox_drain import OutboxDrainJob
 from app.workers.payout_scheduler import PayoutSchedulerJob
+from app.workers.payout_sweep import PayoutSweepJob
 from app.workers.reconcile_sweep import ReconciliationSweepJob
 from app.workers.reserve_release import ReserveReleaseJob
 from app.workers.retry_drain import RetryDrainJob
@@ -53,6 +54,7 @@ JOB_ATTRIBUTES: tuple[str, ...] = (
     "batch_close_job",
     "funding_match_job",
     "deferred_capture_job",
+    "payout_sweep_job",
     "payout_scheduler_job",
     "reserve_release_job",
     "negative_balance_job",
@@ -70,13 +72,31 @@ __all__ = [
     "NegativeBalanceJob",
     "OutboxDrainJob",
     "PayoutSchedulerJob",
+    "PayoutSweepJob",
     "PeriodicJob",
     "ReconciliationSweepJob",
     "ReserveReleaseJob",
     "RetryDrainJob",
     "SettlementImportJob",
+    "jobs_by_name",
     "register_jobs",
 ]
+
+
+def jobs_by_name(container: object) -> dict[str, PeriodicJob]:
+    """Every wired job keyed by its ``name`` — what ``POST /ops/jobs/{name}/run`` resolves.
+
+    Includes the jobs ``register_jobs`` leaves unscheduled, so a name never 404s because
+    of configuration; whether a tick of a switched-off job does anything is the job's own
+    enable check (``RETRY_DRAIN_ENABLED``, ``SETTLEMENT_IMPORT_ENABLED``), as on a schedule.
+    The simulated-time world pokes the long-interval jobs this way after a clock advance.
+    """
+    jobs: dict[str, PeriodicJob] = {}
+    for attribute in JOB_ATTRIBUTES:
+        job = getattr(container, attribute, None)
+        if isinstance(job, PeriodicJob):
+            jobs[job.name] = job
+    return jobs
 
 
 async def register_jobs(

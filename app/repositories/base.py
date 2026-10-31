@@ -18,6 +18,7 @@ from __future__ import annotations
 import abc
 import base64
 import binascii
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Generic, TypeVar
 
@@ -159,6 +160,7 @@ class BaseRepository(Generic[ModelT], abc.ABC):
         *,
         cursor: str | None = None,
         limit: int | None = None,
+        where: Sequence[ColumnElement[bool]] = (),
         **filters: Any,
     ) -> Page[ModelT]:
         """Keyset-paginate over :meth:`_default_order`, descending.
@@ -169,11 +171,12 @@ class BaseRepository(Generic[ModelT], abc.ABC):
 
         ``filters`` are ANDed equality predicates against model columns. An unknown column
         raises rather than being silently ignored — a typo in a filter name that returns
-        every row is how a merchant-scoped list becomes a data leak.
+        every row is how a merchant-scoped list becomes a data leak. ``where`` takes any
+        further predicates a subclass builds for a filter that is not a plain column.
         """
         page_size = clamp_limit(limit)
         order_column = self._default_order()
-        stmt = select(self.model)
+        stmt = select(self.model).where(*where)
 
         for column_name, value in filters.items():
             if value is None:

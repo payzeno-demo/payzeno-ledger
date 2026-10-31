@@ -86,13 +86,16 @@ def install_middleware(
     wraps each new middleware *around* the stack built so far.
     """
     # mTLS is terminated by nginx/payzeno-internal.conf, which only exists in the ECS
-    # task definition and not in docker-compose — so the client-cert requirement follows
-    # whether we are pointed at a real database or a local one. That is a proxy, not a
-    # signal, and it has been on the "make this an explicit env var" list since month 4.
+    # task definition and not in docker-compose. The requirement is now an explicit setting
+    # (INTERNAL_AUTH_REQUIRE_CLIENT_CERT, default on), which the compose override turns off.
+    # The old proxy — a localhost database means a laptop — still exempts `make run`.
     app.add_middleware(
         InternalAuthMiddleware,
         secret=settings.internal_api_secret,
-        require_client_cert="localhost" not in settings.database_url,
+        require_client_cert=(
+            settings.internal_auth_require_client_cert
+            and "localhost" not in settings.database_url
+        ),
     )
     app.add_middleware(RedactionMiddleware, flags=flags)
     app.add_middleware(PrometheusMiddleware)

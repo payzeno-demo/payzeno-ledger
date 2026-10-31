@@ -32,8 +32,19 @@ from app.models.payout import Payout
 from app.repositories.base import BaseRepository
 
 #: Statuses that still have money committed to them. Both are covered by
-#: ``pix_payout_in_flight``, which is unique per (merchant, currency, livemode).
+#: ``pix_payout_in_flight``, which is unique per (merchant, balance currency, livemode).
 IN_FLIGHT_STATUSES: tuple[str, ...] = ("scheduled", "in_transit")
+
+
+def _balance_currency() -> ColumnElement[str]:
+    """The currency of the balance a payout drew from: the source currency when it
+    converted, its own currency when it did not. ``pix_payout_in_flight``'s expression."""
+    return func.coalesce(Payout.source_currency, Payout.currency)
+
+
+def _balance_amount() -> ColumnElement[int]:
+    """What the payout took out of that balance, in the balance's minor units."""
+    return func.coalesce(Payout.source_amount_minor, Payout.amount_minor)
 
 
 class PayoutRepository(BaseRepository[Payout]):
@@ -59,15 +70,19 @@ class PayoutRepository(BaseRepository[Payout]):
         the same balance twice. Note what this read cannot see: a payout another
         connection has inserted but not committed. That is why the calculator runs under
         the merchant-currency advisory lock, and why the partial index is unique.
+
+        ``currency`` is the *balance* currency: a converted payout counts against the
+        balance it came out of, in that balance's minor units.
         """
         stmt = (
-            select(func.coalesce(func.sum(Payout.amount_minor), 0))
+            select(func.coalesce(func.sum(_balance_amount()), 0))
             .where(Payout.merchant_id == merchant_id)
-            .where(Payout.currency == currency)
+            .where(_balance_currency() == currency)
             .where(Payout.livemode == livemode)
             .where(Payout.status.in_(IN_FLIGHT_STATUSES))
         )
-        return int((await session.execute(stmt)).scalar_one())
+        total = (await session.execute(stmt)).scalar_one()
+        return int(total or 0)
 
     async def list_due(
         self,
@@ -121,15 +136,39 @@ class PayoutRepository(BaseRepository[Payout]):
         checks this to return a friendly ``payout_blocked`` instead of letting the insert
         raise an ``IntegrityError`` the caller cannot interpret — but the check is a
         courtesy and the index is the guarantee, in that order.
+
+        ``currency`` is the balance currency, as for :meth:`sum_in_flight`.
         """
         stmt = (
             select(Payout)
             .where(Payout.merchant_id == merchant_id)
-            .where(Payout.currency == currency)
+            .where(_balance_currency() == currency)
             .where(Payout.livemode == livemode)
             .where(Payout.status.in_(IN_FLIGHT_STATUSES))
         )
         return (await session.execute(stmt)).scalars().first()
+
+    async def last_created_at(
+        self,
+        session: AsyncSession,
+        *,
+        merchant_id: str,
+        currency: str,
+        livemode: bool,
+    ) -> dt.datetime | None:
+        """When the newest payout out of this balance was created, whatever became of it.
+
+        ``PayoutSweepJob`` asks this to decide whether a merchant's daily, weekly or monthly
+        payout for a balance is still due in the current period. Served by
+        ``ix_payout_merchant_created``.
+        """
+        stmt = (
+            select(func.max(Payout.created_at))
+            .where(Payout.merchant_id == merchant_id)
+            .where(_balance_currency() == currency)
+            .where(Payout.livemode == livemode)
+        )
+        return (await session.execute(stmt)).scalar_one_or_none()
 
     async def mark_in_transit(
         self,

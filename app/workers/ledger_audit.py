@@ -93,14 +93,14 @@ class LedgerAuditJob(PeriodicJob):
                     "trial_balance_unbalanced",
                     currency=currency,
                     delta_minor=result.delta_minor,
-                    debit_total_minor=result.debit_total_minor,
-                    credit_total_minor=result.credit_total_minor,
+                    debit_total_minor=result.debit_minor,
+                    credit_total_minor=result.credit_minor,
                 )
             else:
                 logger.info(
                     "trial_balance_ok",
                     currency=currency,
-                    debit_total_minor=result.debit_total_minor,
+                    debit_total_minor=result.debit_minor,
                 )
 
         duplicates = await self._audit.check_duplicate_settlements()

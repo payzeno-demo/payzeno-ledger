@@ -73,6 +73,90 @@ class PayoutReversalPostingRule(PostingRule):
         )
 
 
+class FxPayoutSourcePostingRule(PostingRule):
+    """A converted payout, the balance side: Dr ``merchant_payable`` / Cr ``fx_clearing``.
+
+    Posted in the **source** currency for ``gross_minor`` (the amount drawn from the
+    balance). Its sibling :class:`FxPayoutTargetPostingRule` posts the bank side in the
+    target currency. Two transactions because invariant 3 is one currency per transaction;
+    each balances on its own, and ``fx_clearing`` carries the position between them.
+    """
+
+    purpose: ClassVar[LedgerPurpose] = "payout"
+
+    def build(self, ctx: PostingContext) -> list[PostingLine]:
+        if ctx.gross_minor <= 0:
+            raise ValidationError(
+                "a converted payout needs a positive source amount",
+                details={"gross_minor": ctx.gross_minor, "merchant_id": ctx.merchant_id},
+            )
+        return self._built(
+            ctx,
+            [
+                debit("merchant_payable", ctx.gross_minor),
+                credit("fx_clearing", ctx.gross_minor),
+            ],
+        )
+
+
+class FxPayoutTargetPostingRule(PostingRule):
+    """A converted payout, the bank side, in the **target** currency.
+
+    Dr ``fx_clearing`` (``gross_minor``: the source at the mid-rate)
+    Cr ``cash`` (``net_minor``: what lands in the bank) + ``fx_revenue`` (``fee_minor``:
+    the markup). ``gross == net + fee`` is checked rather than assumed — the three come
+    from :func:`app.domain.fx.quote_payout_conversion` and a caller that assembled them by
+    hand is the one place they could disagree.
+    """
+
+    purpose: ClassVar[LedgerPurpose] = "payout"
+
+    def build(self, ctx: PostingContext) -> list[PostingLine]:
+        if ctx.net_minor <= 0 or ctx.fee_minor < 0:
+            raise ValidationError(
+                "a converted payout needs a positive payout amount and a non-negative spread",
+                details={
+                    "net_minor": ctx.net_minor,
+                    "fee_minor": ctx.fee_minor,
+                    "merchant_id": ctx.merchant_id,
+                },
+            )
+        if ctx.gross_minor != ctx.net_minor + ctx.fee_minor:
+            raise ValidationError(
+                "mid amount must equal payout plus spread",
+                details={
+                    "gross_minor": ctx.gross_minor,
+                    "net_minor": ctx.net_minor,
+                    "fee_minor": ctx.fee_minor,
+                },
+            )
+        return self._built(
+            ctx,
+            [
+                debit("fx_clearing", ctx.gross_minor),
+                credit("cash", ctx.net_minor),
+                credit("fx_revenue", ctx.fee_minor),
+            ],
+        )
+
+
+def mirrored(lines: list[PostingLine]) -> list[PostingLine]:
+    """The same legs with every direction flipped — a payout reversal's shape.
+
+    A failed or returned converted payout gives back exactly what the conversion took, at
+    the rate it was taken: the merchant's source balance is restored in full and the
+    spread is un-booked. No second conversion, so no FX gain or loss on a return.
+    """
+    return [
+        PostingLine(
+            account_type=line.account_type,
+            direction="credit" if line.direction == "debit" else "debit",
+            amount_minor=line.amount_minor,
+        )
+        for line in lines
+    ]
+
+
 class ReserveHoldPostingRule(PostingRule):
     """A ``line_type='reserve_hold'`` line in an acquirer settlement file.
 

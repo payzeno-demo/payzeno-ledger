@@ -99,7 +99,8 @@ async def test_entries_are_serialised_in_the_documented_shape(sessions_factory) 
         sessions_factory, StubRepositories(repo), 50, "acct_merchant_payable_usd"
     )
 
-    assert body["object"] == "list"
+    # `Paginated` has no `object` key; the contract forbids one.
+    assert set(body) == {"data", "next_cursor", "has_more"}
     assert len(body["data"]) == 3
     first = body["data"][0]
     assert first["object"] == "ledger_entry"

@@ -16,6 +16,7 @@ from typing import ClassVar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
+from app.models.projections import SettlementCharge
 from app.models.reconciliation_item import ReconciliationItem
 from app.ports import Clock
 from app.repositories.settlement_charge import SettlementChargeRepository
@@ -30,6 +31,36 @@ HEURISTIC_WINDOW = timedelta(days=2)
 HEURISTIC_AMOUNT_SLACK_MINOR = 2
 
 NO_MATCH = MatchOutcome(charge_id=None, method="unmatched", confident=False)
+
+
+def _matched(charge: SettlementCharge, method: str, *, confident: bool) -> MatchOutcome:
+    """An outcome carrying what the item needs from the charge it matched."""
+    return MatchOutcome(
+        charge_id=charge.charge_id,
+        method=method,
+        confident=confident,
+        merchant_id=charge.merchant_id,
+        expected_gross_minor=charge.amount_minor,
+    )
+
+
+def apply_match(item: ReconciliationItem, outcome: MatchOutcome) -> None:
+    """Attach a matched charge to an item, with everything settlement reads off it.
+
+    ``SettlementPoster`` posts against ``merchant_id`` and refuses a line whose
+    ``variance_minor`` is outside the merchant's tolerance, so an item that gets only a
+    ``charge_id`` fails at posting. The merchant comes from the charge when the line did
+    not name one. The expected amount and the variance are set for ``sale`` lines only:
+    the charge's authorised amount is what a sale line should settle at, and says nothing
+    about a refund, chargeback or fee line that references the same charge.
+    """
+    item.charge_id = outcome.charge_id
+    item.match_method = outcome.method
+    if item.merchant_id is None:
+        item.merchant_id = outcome.merchant_id
+    if item.line_type == "sale" and outcome.expected_gross_minor is not None:
+        item.expected_gross_minor = outcome.expected_gross_minor
+        item.variance_minor = item.compute_variance_minor()
 
 
 class MatchStrategy(abc.ABC):
@@ -65,7 +96,7 @@ class ExactReferenceMatch(MatchStrategy):
         )
         if charge is None:
             return NO_MATCH
-        return MatchOutcome(charge_id=charge.charge_id, method=self.method, confident=True)
+        return _matched(charge, self.method, confident=True)
 
 
 class NetworkTransactionMatch(MatchStrategy):
@@ -76,7 +107,7 @@ class NetworkTransactionMatch(MatchStrategy):
     exact-reference strategy misses.
     """
 
-    method = "network_transaction"
+    method = "network_txn"
 
     def __init__(self, charges: SettlementChargeRepository) -> None:
         self._charges = charges
@@ -91,7 +122,7 @@ class NetworkTransactionMatch(MatchStrategy):
         )
         if charge is None:
             return NO_MATCH
-        return MatchOutcome(charge_id=charge.charge_id, method=self.method, confident=True)
+        return _matched(charge, self.method, confident=True)
 
 
 class HeuristicAmountWindowMatch(MatchStrategy):
@@ -101,7 +132,7 @@ class HeuristicAmountWindowMatch(MatchStrategy):
     the same day are ordinary, and settling the wrong one moves real money.
     """
 
-    method = "heuristic_amount_window"
+    method = "heuristic"
 
     def __init__(self, charges: SettlementChargeRepository, clock: Clock) -> None:
         self._charges = charges
@@ -125,9 +156,7 @@ class HeuristicAmountWindowMatch(MatchStrategy):
         if len(candidates) != 1:
             # Zero is no evidence; more than one is ambiguous evidence. Both abstain.
             return NO_MATCH
-        return MatchOutcome(
-            charge_id=candidates[0].charge_id, method=self.method, confident=False
-        )
+        return _matched(candidates[0], self.method, confident=False)
 
 
 class ManualMatch(MatchStrategy):
@@ -149,7 +178,7 @@ class ManualMatch(MatchStrategy):
         if item.charge_id is None:
             return NO_MATCH
         charge = await self._charges.get_or_raise(session, item.charge_id)
-        return MatchOutcome(charge_id=charge.charge_id, method=self.method, confident=True)
+        return _matched(charge, self.method, confident=True)
 
 
 async def match_items(
@@ -177,8 +206,7 @@ async def match_items(
             item.match_method = "unmatched"
             continue
 
-        item.charge_id = outcome.charge_id
-        item.match_method = outcome.method
+        apply_match(item, outcome)
         item.matched_at = clock.now()
         if not outcome.confident:
             item.status = "needs_review"

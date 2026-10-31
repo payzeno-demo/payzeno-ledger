@@ -121,7 +121,10 @@ class ReconciliationService:
                     async with self._sessions.begin() as session:
                         await self._process_item(session, item.id)
                     stats.settled += 1
-                    stats.posted_total_minor += item.gross_minor
+                    # Net, the same basis as `expected_total_minor` (the items' net
+                    # at close), so a fully settled batch compares equal rather than
+                    # tripping the overposted alarm by the fees.
+                    stats.posted_total_minor += item.net_minor
                     stats.fee_total_minor += item.fee_minor
                     stats.net_total_minor += item.net_minor
                     if item.charge_id is not None:

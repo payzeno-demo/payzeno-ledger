@@ -89,12 +89,17 @@ class SandboxProcessorClient(ProcessorClient):
             return CaptureStatus(state="not_captured", reference=None)
         return CaptureStatus(state="captured", reference=existing.reference)
 
-    async def fetch_settlement_file(self, acquirer: str, processing_date: date) -> bytes:
+    async def fetch_settlement_file(
+        self, acquirer: str, processing_date: date, currency: str | None = None
+    ) -> bytes:
         logger.debug(
             "sandbox_fetch_settlement_file",
             acquirer=acquirer,
             processing_date=processing_date.isoformat(),
+            currency=currency,
         )
+        # The sample is all USD. Asked for another currency, the importer filters every
+        # line out, which is the same answer as an empty file for that currency.
         return _SAMPLE_FILE
 
     async def health_check(self) -> bool:

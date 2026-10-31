@@ -43,6 +43,12 @@ NORMAL_BALANCE_BY_TYPE: Final[dict[str, str]] = {
     "chargeback_liability": "credit",
     "cash": "debit",
     "rounding_adjustment": "credit",
+    # RFC platform-v2 §7. A converted payout leaves the source-currency balance through
+    # `fx_clearing` in that currency and arrives in the bank currency through
+    # `fx_clearing` in that one, so each currency's legs balance on their own. The two
+    # clearing balances together are treasury's open FX position. The spread is revenue.
+    "fx_clearing": "debit",
+    "fx_revenue": "credit",
 }
 
 #: Account types that exist once per currency at the platform level, with no merchant.
@@ -54,6 +60,8 @@ PLATFORM_ACCOUNT_TYPES: Final[frozenset[str]] = frozenset(
         "scheme_fee_expense",
         "acquirer_fee_expense",
         "rounding_adjustment",
+        "fx_clearing",
+        "fx_revenue",
     }
 )
 

@@ -31,7 +31,10 @@ from app.api.schemas import (
     MarkPayoutPaidRequest,
     Paginated,
     Payout,
+    contract_page,
+    contract_payload,
 )
+from app.domain.fx import format_rate
 from app.errors import ValidationError
 from app.logging import get_logger
 from app.ports import SessionFactory
@@ -51,28 +54,37 @@ ReposDep = Annotated[Any, Depends(get_repositories)]
 
 
 def _serialise(payout: Any) -> dict[str, Any]:
-    return {
-        "id": payout.id,
-        "object": "payout",
-        "merchant_id": payout.merchant_id,
-        "bank_account_id": payout.bank_account_id,
-        "amount_minor": payout.amount_minor,
-        "currency": payout.currency,
-        "status": payout.status,
-        "method": payout.method,
-        "statement_descriptor": payout.statement_descriptor,
-        "available_on": payout.available_on,
-        "arrival_estimate": payout.arrival_estimate,
-        "initiated_at": payout.initiated_at,
-        "paid_at": payout.paid_at,
-        "bank_reference": payout.bank_reference,
-        "failure_code": payout.failure_code,
-        "failure_message": payout.failure_message,
-        "ledger_transaction_id": payout.ledger_transaction_id,
-        "reversal_transaction_id": payout.reversal_transaction_id,
-        "livemode": payout.livemode,
-        "created_at": payout.created_at,
-    }
+    """ORM row → exactly the ``Payout`` contract."""
+    return contract_payload(
+        Payout,
+        {
+            "id": payout.id,
+            "object": "payout",
+            "merchant_id": payout.merchant_id,
+            "bank_account_id": payout.bank_account_id,
+            "amount_minor": payout.amount_minor,
+            "currency": payout.currency,
+            "status": payout.status,
+            "method": payout.method,
+            "statement_descriptor": payout.statement_descriptor,
+            "available_on": payout.available_on,
+            "arrival_estimate": payout.arrival_estimate,
+            "initiated_at": payout.initiated_at,
+            "paid_at": payout.paid_at,
+            "failed_at": payout.failed_at,
+            "returned_at": payout.returned_at,
+            "failure_code": payout.failure_code,
+            "ledger_transaction_id": payout.ledger_transaction_id,
+            "reversal_transaction_id": payout.reversal_transaction_id,
+            "livemode": payout.livemode,
+            "created_at": payout.created_at,
+            # RFC platform-v2 §7. Null unless the payout converted; `amount_minor` and
+            # `currency` above are what lands in the bank either way.
+            "source_amount_minor": payout.source_amount_minor,
+            "source_currency": payout.source_currency,
+            "fx_rate": format_rate(payout.fx_rate) if payout.fx_rate is not None else None,
+        },
+    )
 
 
 @router.get("", response_model=Paginated[Payout], summary="List payouts")
@@ -99,12 +111,12 @@ async def list_payouts(
             status=status_filter,
             currency=currency,
         )
-        return {
-            "object": "list",
-            "data": [_serialise(row) for row in page.items],
-            "has_more": page.has_more,
-            "next_cursor": page.next_cursor,
-        }
+        return contract_page(
+            Payout,
+            [_serialise(row) for row in page.items],
+            has_more=page.has_more,
+            next_cursor=page.next_cursor,
+        )
 
 
 @router.get("/{payout_id}", response_model=Payout, summary="Fetch one payout")
@@ -131,6 +143,11 @@ async def create_payout(
     caller: InternalCaller,
 ) -> dict[str, Any]:
     """``CreatePayoutRequest`` plus a ``merchant_id`` the public shape does not carry.
+
+    ``currency`` is the balance being paid out. When the bank account — named, or the
+    merchant's default for that currency, or failing that the merchant's default account —
+    is in another currency, the payout converts (RFC platform-v2 §7) and the response
+    carries ``source_amount_minor``/``source_currency``/``fx_rate``.
 
     The body is taken as a ``dict`` rather than the contract model because the internal
     request is the public one *and* a merchant scope, and declaring a second pydantic

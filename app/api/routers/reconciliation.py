@@ -34,6 +34,7 @@ from app.api.schemas import (
     ReconciliationRun,
     RetryReconciliationItemRequest,
     StartReconciliationRequest,
+    contract_payload,
 )
 from app.db.locks import AdvisoryLockManager
 from app.errors import SettlementLockedError
@@ -61,51 +62,57 @@ ReposDep = Annotated[Any, Depends(get_repositories)]
 
 
 def _serialise_item(item: Any) -> dict[str, Any]:
-    """ORM row → the ``ReconciliationItem`` shape in ``payzeno_contracts.types``."""
-    return {
-        "id": item.id,
-        "object": "reconciliation_item",
-        "batch_id": item.batch_id,
-        "charge_id": item.charge_id,
-        "merchant_id": item.merchant_id,
-        "line_type": item.line_type,
-        "gross_minor": item.gross_minor,
-        "fee_minor": item.fee_minor,
-        "interchange_minor": item.interchange_minor,
-        "scheme_fee_minor": item.scheme_fee_minor,
-        "net_minor": item.net_minor,
-        "expected_gross_minor": item.expected_gross_minor,
-        "variance_minor": item.variance_minor,
-        "currency": item.currency,
-        "livemode": item.livemode,
-        "acquirer_reference": item.acquirer_reference,
-        "match_method": item.match_method,
-        "matched_at": item.matched_at,
-        "status": item.status,
-        "attempt_count": item.attempt_count,
-        "last_error_code": item.last_error_code,
-        "last_attempt_at": item.last_attempt_at,
-        "next_attempt_at": item.next_attempt_at,
-        "settled_transaction_id": item.settled_transaction_id,
-        "created_at": item.created_at,
-        "updated_at": item.updated_at,
-    }
+    """ORM row → exactly the ``ReconciliationItem`` contract."""
+    return contract_payload(
+        ReconciliationItem,
+        {
+            "id": item.id,
+            "object": "reconciliation_item",
+            "batch_id": item.batch_id,
+            "charge_id": item.charge_id,
+            "merchant_id": item.merchant_id,
+            "line_type": item.line_type,
+            "gross_minor": item.gross_minor,
+            "fee_minor": item.fee_minor,
+            "interchange_minor": item.interchange_minor,
+            "scheme_fee_minor": item.scheme_fee_minor,
+            "net_minor": item.net_minor,
+            "expected_gross_minor": item.expected_gross_minor,
+            "variance_minor": item.variance_minor,
+            "currency": item.currency,
+            "livemode": item.livemode,
+            "acquirer_reference": item.acquirer_reference,
+            "match_method": item.match_method,
+            "matched_at": item.matched_at,
+            "status": item.status,
+            "attempt_count": item.attempt_count,
+            "last_error_code": item.last_error_code,
+            "last_attempt_at": item.last_attempt_at,
+            "next_attempt_at": item.next_attempt_at,
+            "settled_transaction_id": item.settled_transaction_id,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+        },
+    )
 
 
 def _serialise_run(run: Any) -> dict[str, Any]:
-    return {
-        "id": run.id,
-        "object": "reconciliation_run",
-        "batch_id": run.batch_id,
-        "trigger": run.trigger,
-        "status": run.status,
-        "items_total": run.items_total,
-        "items_settled": run.items_settled,
-        "items_failed": run.items_failed,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-        "error_summary": run.error_summary,
-    }
+    return contract_payload(
+        ReconciliationRun,
+        {
+            "id": run.id,
+            "object": "reconciliation_run",
+            "batch_id": run.batch_id,
+            "trigger": run.trigger,
+            "status": run.status,
+            "items_total": run.items_total,
+            "items_settled": run.items_settled,
+            "items_failed": run.items_failed,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "error_summary": run.error_summary,
+        },
+    )
 
 
 @router.post(
@@ -248,4 +255,6 @@ async def get_backlog(
     On the night of PAY-2041 this is the number that went from single digits to 4,113,
     and it is the one an operator refreshes while the drain works through it.
     """
-    return await backlog.get_backlog(currency=currency, batch_id=batch_id)
+    return contract_payload(
+        ReconciliationBacklog, await backlog.summary(currency=currency, batch_id=batch_id)
+    )

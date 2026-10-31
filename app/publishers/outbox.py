@@ -18,6 +18,7 @@ drain's transaction.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from payzeno_contracts.events import EVENT_SCHEMA_VERSIONS
@@ -71,15 +72,19 @@ class OutboxPublisher(EventPublisher):
             livemode=livemode,
             version=EVENT_SCHEMA_VERSIONS.get(event_type, 1),
         )
+        # Resolved here so an event type with no topic fails at the publish site, inside
+        # the business transaction, rather than at drain time.
+        topic = topic_for(event_type)
         row = EventOutbox(
             id=envelope.id,
-            event_type=envelope.type,
-            topic=topic_for(event_type),
+            type=envelope.type,
+            version=envelope.version,
             payload=_as_dict(envelope),
             merchant_id=merchant_id,
             correlation_id=envelope.correlation_id,
+            causation_id=envelope.causation_id,
+            occurred_at=datetime.fromisoformat(envelope.occurred_at),
             livemode=livemode,
-            status="pending",
             attempt_count=0,
         )
         await self._outbox.add(session, row)
@@ -87,6 +92,7 @@ class OutboxPublisher(EventPublisher):
             "outbox_staged",
             event_id=envelope.id,
             event_type=event_type,
+            topic=topic,
             merchant_id=merchant_id,
         )
         return envelope.id

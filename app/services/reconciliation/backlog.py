@@ -24,6 +24,11 @@ from app.services.reconciliation.types import BacklogBucket
 
 logger = get_logger(__name__)
 
+#: States an item only leaves when an operator acts. Counted, not retried.
+_NEEDS_HUMAN_STATUSES: frozenset[str] = frozenset(
+    {"failed", "orphaned", "needs_review", "variance_exceeded"}
+)
+
 #: A backlog older than this is what on-call actually wants highlighted.
 STALE_AFTER_SECONDS = 900
 
@@ -108,6 +113,44 @@ class BacklogService:
                 }
                 for bucket in buckets
             ],
+        }
+
+    async def summary(
+        self, *, currency: str | None = None, batch_id: str | None = None
+    ) -> dict[str, object]:
+        """The ``ReconciliationBacklog`` contract: item counts by state, oldest retry due.
+
+        ``retryable`` is everything the sweep or the drain will still pick up
+        (``RETRYABLE_STATUSES``); the other four are the states only a human moves an item
+        out of. :meth:`get_backlog` is the per-batch breakdown behind the same numbers.
+        """
+        async with self._sessions.begin() as session:
+            rows = await self._items.aggregate_backlog(
+                session,
+                statuses=RETRYABLE_STATUSES | _NEEDS_HUMAN_STATUSES,
+                currency=currency,
+                batch_id=batch_id,
+            )
+
+        counts = dict.fromkeys(_NEEDS_HUMAN_STATUSES, 0)
+        retryable = 0
+        oldest_retryable: datetime | None = None
+        for row in rows:
+            if row.status in RETRYABLE_STATUSES:
+                retryable += row.item_count
+                due = row.oldest_next_attempt_at
+                if due is not None and (oldest_retryable is None or due < oldest_retryable):
+                    oldest_retryable = due
+            else:
+                counts[row.status] += row.item_count
+        return {
+            "object": "reconciliation_backlog",
+            "retryable": retryable,
+            "failed": counts["failed"],
+            "orphaned": counts["orphaned"],
+            "needs_review": counts["needs_review"],
+            "variance_exceeded": counts["variance_exceeded"],
+            "oldest_retryable_at": oldest_retryable.isoformat() if oldest_retryable else None,
         }
 
     async def batches_with_running_run(self, batch_ids: list[str]) -> set[str]:

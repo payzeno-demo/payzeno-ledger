@@ -14,6 +14,7 @@ every acquirer call by three during exactly the outage where that is most harmfu
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Any, Mapping
 
 import httpx
@@ -21,6 +22,7 @@ import httpx
 from app.errors import (
     ProcessorIndeterminateError,
     ProcessorUnavailableError,
+    SettlementFileNotReadyError,
     UpstreamError,
 )
 from app.logging import get_logger
@@ -90,6 +92,34 @@ class LedgerHttpxClient:
         headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         return await self._request("POST", path, json=json, headers=headers)
+
+    async def get_settlement_file(
+        self, processing_date: date, currency: str | None = None
+    ) -> bytes:
+        """``GET /v2/settlement-files?date=&currency=`` — the route both acquirers share.
+
+        Without ``currency`` the acquirer answers with whatever it filed for the day, which
+        is what it did before RFC platform-v2. A ``404`` is the acquirer saying the file is
+        not published yet (``file_not_ready``) and comes back as
+        :class:`SettlementFileNotReadyError`, *not* as an ``UpstreamError``, so the circuit
+        breaker does not count "not yet" as the acquirer being down.
+        """
+        params = {"date": processing_date.isoformat()}
+        if currency is not None:
+            params["currency"] = currency
+        try:
+            response = await self.get("/v2/settlement-files", params=params)
+        except UpstreamError as exc:
+            if exc.details.get("status") == 404:
+                raise SettlementFileNotReadyError(
+                    f"{self._acquirer} has no settlement file for {params}",
+                    acquirer=self._acquirer,
+                    processing_date=processing_date.isoformat(),
+                    currency=currency,
+                    body=exc.details.get("body"),
+                ) from exc
+            raise
+        return response.content
 
     async def aclose(self) -> None:
         await self._client.aclose()

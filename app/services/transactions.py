@@ -35,23 +35,31 @@ from app.errors import (
     UnbalancedTransactionError,
 )
 from app.logging import get_logger
+from app.models.account import NORMAL_BALANCE_BY_TYPE, PLATFORM_ACCOUNT_TYPES
 from app.models.ledger_entry import LedgerEntry
 from app.models.ledger_transaction import LedgerTransaction
 from app.ports import Clock
 from app.publishers.outbox import OutboxPublisher
 from app.repositories.account import AccountRepository
 from app.repositories.balance_cache import MerchantBalanceCacheRepository
-from app.repositories.ledger_entry import LedgerEntryRepository
+from app.repositories.ledger_entry import BUCKET_ACCOUNT_TYPES, LedgerEntryRepository
 from app.repositories.ledger_transaction import IdempotencyClaim, LedgerTransactionRepository
 from app.services.accounts import AccountResolver
 
 logger = get_logger(__name__)
 
-#: Account types whose balance movement feeds `merchant_balance_cache.available_minor`.
-AVAILABLE_ACCOUNT_TYPES: frozenset[str] = frozenset({"merchant_payable"})
-PENDING_ACCOUNT_TYPES: frozenset[str] = frozenset({"merchant_pending"})
-RESERVED_ACCOUNT_TYPES: frozenset[str] = frozenset({"merchant_reserve"})
-DISPUTED_ACCOUNT_TYPES: frozenset[str] = frozenset({"merchant_disputed"})
+
+def _account_types_in(bucket: str) -> frozenset[str]:
+    return frozenset(t for t, name in BUCKET_ACCOUNT_TYPES.items() if name == bucket)
+
+
+#: Account types whose movement feeds each `merchant_balance_cache` column. Derived from
+#: `BUCKET_ACCOUNT_TYPES`, the mapping the balance reads and the nightly drift check use,
+#: so the cache and the entries cannot disagree about which account is which bucket.
+AVAILABLE_ACCOUNT_TYPES: frozenset[str] = _account_types_in("merchant_payable")
+PENDING_ACCOUNT_TYPES: frozenset[str] = _account_types_in("merchant_pending")
+RESERVED_ACCOUNT_TYPES: frozenset[str] = _account_types_in("merchant_reserve")
+DISPUTED_ACCOUNT_TYPES: frozenset[str] = _account_types_in("merchant_disputed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +178,7 @@ class LedgerPoster:
             merchant_id=merchant_id,
             currency=currency,
             livemode=livemode,
-            entries=entries,
+            lines=lines,
             transaction_id=transaction.id,
         )
 
@@ -238,14 +246,18 @@ class LedgerPoster:
         UPDATE or DELETE of the original.
         """
         original_entries = await self._entries.list_for_transaction(session, original.id)
-        flipped = [
-            PostingLine(
-                account_type=entry.account_type,
-                direction="credit" if entry.direction == "debit" else "debit",
-                amount_minor=entry.amount_minor,
+        # An entry carries its account, not the account's type; the type is what a
+        # posting line is written in.
+        flipped: list[PostingLine] = []
+        for entry in original_entries:
+            account = await self._accounts.get_or_raise(session, entry.account_id)
+            flipped.append(
+                PostingLine(
+                    account_type=account.type,
+                    direction="credit" if entry.direction == "debit" else "debit",
+                    amount_minor=entry.amount_minor,
+                )
             )
-            for entry in original_entries
-        ]
         result = await self.post(
             session,
             idempotency_key=idempotency_key,
@@ -299,7 +311,6 @@ class LedgerPoster:
                     id=new_id("le"),
                     transaction_id=transaction.id,
                     account_id=account.id,
-                    account_type=line.account_type,
                     direction=line.direction,
                     amount_minor=line.amount_minor,
                     currency=currency,
@@ -316,15 +327,17 @@ class LedgerPoster:
         merchant_id: str | None,
         currency: str,
         livemode: bool,
-        entries: list[LedgerEntry],
+        lines: list[PostingLine],
         transaction_id: str,
     ) -> None:
+        # From the posting lines rather than the entries: one entry per line, in order,
+        # and the line is what carries the account type.
         if merchant_id is None:
             return
-        available = _signed_total(entries, AVAILABLE_ACCOUNT_TYPES)
-        pending = _signed_total(entries, PENDING_ACCOUNT_TYPES)
-        reserved = _signed_total(entries, RESERVED_ACCOUNT_TYPES)
-        disputed = _signed_total(entries, DISPUTED_ACCOUNT_TYPES)
+        available = _signed_total(lines, AVAILABLE_ACCOUNT_TYPES)
+        pending = _signed_total(lines, PENDING_ACCOUNT_TYPES)
+        reserved = _signed_total(lines, RESERVED_ACCOUNT_TYPES)
+        disputed = _signed_total(lines, DISPUTED_ACCOUNT_TYPES)
         if not any((available, pending, reserved, disputed)):
             return
         await self._balances.apply_delta(
@@ -382,15 +395,20 @@ class LedgerPoster:
                 )
 
 
-def _signed_total(entries: list[LedgerEntry], account_types: frozenset[str]) -> int:
-    """Credits increase what Payzeno owes the merchant; debits decrease it."""
+def _signed_total(lines: list[PostingLine], account_types: frozenset[str]) -> int:
+    """Movement on each account's normal side, the sign ``_sum_buckets`` reads back.
+
+    A credit grows a credit-normal account (``merchant_payable``: what Payzeno owes the
+    merchant); a debit grows a debit-normal one (``merchant_receivable``: what is pending).
+    """
     total = 0
-    for entry in entries:
-        if entry.account_type not in account_types:
+    for line in lines:
+        if line.account_type not in account_types:
             continue
-        total += entry.amount_minor if entry.direction == "credit" else -entry.amount_minor
+        normal = NORMAL_BALANCE_BY_TYPE.get(line.account_type, "credit")
+        total += line.amount_minor if line.direction == normal else -line.amount_minor
     return total
 
 
 def _is_platform_account(account_type: str) -> bool:
-    return account_type.startswith("platform_") or account_type in ("cash", "acquirer_receivable")
+    return account_type in PLATFORM_ACCOUNT_TYPES

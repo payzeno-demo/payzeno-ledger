@@ -27,7 +27,8 @@ Four things, in order of how much of the code they are:
    parse them, match each line to a charge projection, and post the resulting entries. The
    unmatched remainder is the reconciliation backlog.
 3. **Pays merchants out.** Available balance, four rails (ACH, same-day ACH, SEPA, Faster
-   Payments), four cutoffs, four calendars.
+   Payments), four cutoffs, four calendars. Balances are per currency; a payout whose bank
+   account is in another currency converts at payout time (RFC platform-v2 §7, below).
 4. **Audits itself.** A nightly trial balance per currency. If it fails, it raises
    `LedgerIntegrityError` and publishes `ledger.imbalance_detected`, and somebody's night ends.
 
@@ -49,7 +50,7 @@ That gives you the HTTP surface only. The periodic jobs and the SQS consumers ar
 processes on purpose — same image, different command:
 
 ```bash
-make worker           # APScheduler: the 11 jobs below
+make worker           # APScheduler: the 12 jobs below
 make consumer         # the two SQS consumers
 ```
 
@@ -79,17 +80,25 @@ and not a vanity number.
 
 ## The periodic jobs
 
-All eleven subclass `PeriodicJob` and register in `app/workers/__init__.py::register_jobs()`.
+All twelve subclass `PeriodicJob` and register in `app/workers/__init__.py::register_jobs()`.
 Intervals come off `Settings` — read at construction, never at import — which is why they can
 be changed with a task restart instead of a redeploy. That mattered once.
+
+Every job is registered with `coalesce=True` and `misfire_grace_time=None` on a
+`CatchUpIntervalTrigger`, so when the clock jumps forward (locally the stack runs on simulated
+time, RFC platform-v2 §10) each overdue job runs **once**, immediately, instead of being
+dropped as "missed" until its next slot. Jobs whose next slot is too far off to wait for are
+poked with `POST /internal/v1/ops/jobs/{name}/run` (internal auth; `payzeno-ops` is an allowed
+caller), which runs one tick in the request and returns its `JobResult`.
 
 | Job | Every | What it does |
 |---|---|---|
 | `ReconciliationSweepJob` | 900s | walks open batches, reconciles items under a batch advisory lock |
 | `RetryDrainJob` | 60s | drains retryable items. **Gated by `RETRY_DRAIN_ENABLED`** |
-| `SettlementImportJob` | 1h | fetches yesterday's settlement files from both acquirers |
+| `SettlementImportJob` | 1h | fetches each acquirer's file per date **and currency** (`?date=&currency=`), last 3 days or back to the newest batch after a clock jump |
 | `FundingMatchJob` | 900s | matches bank funding events to closed batches |
 | `DeferredCaptureJob` | 30s | resolves indeterminate captures via `get_capture_status` |
+| `PayoutSweepJob` | 1h | daily/weekly/monthly merchants: one payout per non-zero currency balance per period, to the default bank account, converting if needed |
 | `PayoutSchedulerJob` | 1h | schedules payouts due before the next per-rail cutoff |
 | `ReserveReleaseJob` | daily | releases reserve holds whose window has elapsed |
 | `NegativeBalanceJob` | daily | flags merchants whose available balance has gone negative |
@@ -98,6 +107,28 @@ be changed with a task restart instead of a redeploy. That mattered once.
 | `BatchCloseJob` | 1h | closes batches whose items are all terminal |
 
 ---
+
+## Multi-currency (RFC platform-v2 §7)
+
+- **Balances are per currency.** A EUR payment for a USD merchant lands in the merchant's EUR
+  accounts at auth, capture and settlement, with no conversion. `GET
+  /internal/v1/balances/{merchant}` without `?currency=` answers `{"data": [Balance, ...]}`, one
+  per currency the merchant has posted in.
+- **Payouts convert.** `CreatePayoutRequest.currency` is the balance paid out. The bank account
+  is the one named, else the default for that currency, else the merchant's default (preferring
+  `default_currency`). When it is in another currency the payout converts at the provider
+  mid-rate less `FX_PAYOUT_MARKUP_BPS` (`FX_PROVIDER_URL`, `GET /v1/rates?base=USD`, cached 60s
+  on the injected clock). Two transactions, one per currency, each balanced through the
+  platform `fx_clearing` account in its currency; the spread is `fx_revenue` in the bank
+  currency. The payout row's `amount_minor`/`currency` are what lands in the bank;
+  `source_amount_minor`/`source_currency`/`fx_rate` say where it came from. A failure, return
+  or cancel mirrors both legs at the original rate.
+- **The lock, the in-flight check and `pix_payout_in_flight` are on the balance currency**
+  (`coalesce(source_currency, currency)`, migration `0035`), not the bank's.
+- **Settlement files are per currency**: one batch per `(acquirer, date, currency)`,
+  `file_reference = "{acquirer}-{date}-{currency}"`. A day imported before the split (per-day
+  reference) counts as imported for its currency, and a line another file of the same acquirer
+  and currency already carried (±7 days) is not imported twice.
 
 ## Layout
 
@@ -115,11 +146,11 @@ app/
     reconciliation/  sweep, retry, matcher, poster, backlog
     rails/           the four payout initiators
   consumers/       two SQS consumers, insert-first dedupe
-  workers/         the 11 jobs above
+  workers/         the 12 jobs above
   api/             thin routers. no business logic. every route has a response_model.
   middleware/      six, in a contracted order
   ops/             the operator CLI
-migrations/        alembic, 0001 -> 0033, linear
+migrations/        alembic, 0001 -> 0035, linear
 tests/             pytest, seven layers mirroring app/
 ```
 

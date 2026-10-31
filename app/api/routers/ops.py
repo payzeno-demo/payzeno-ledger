@@ -1,6 +1,10 @@
 """``/internal/v1/ops`` — the staff-only surface.
 
-Four routes, all ``internal`` **plus** a forwarded staff claim. The ledger does not
+Four routes, all ``internal`` **plus** a forwarded staff claim — and two that need no staff
+claim because they name no merchant and move no money by themselves: the trial balance,
+and ``POST /jobs/{name}/run``, which runs one tick of a periodic job now (RFC platform-v2
+§10: after the simulated clock advances, sim-world pokes the long-interval jobs through it
+as ``X-Payzeno-Service: payzeno-ops``). The ledger does not
 authenticate humans; payzeno-api's ``StaffGuard`` does, and forwards the operator's id in
 ``X-Payzeno-Staff-Id``. What the ledger enforces is *attribution*: an adjustment with no
 recorded maker and checker is the first thing an auditor asks about, and this service has
@@ -22,6 +26,7 @@ from app.api.deps import (
     StaffCaller,
     get_adjustment_service,
     get_audit_service,
+    get_jobs,
     get_manual_match,
     get_repositories,
     get_sessions,
@@ -30,19 +35,22 @@ from app.api.deps import (
 from app.api.routers.reconciliation import _serialise_item
 from app.api.schemas import (
     ApproveAdjustmentRequest,
+    JobRunResponse,
     LedgerAdjustmentRequest,
     ManualMatchRequest,
     ReconciliationItem,
     RequestAdjustmentRequest,
     RunTrialBalanceRequest,
     TrialBalanceResult,
+    contract_payload,
 )
-from app.errors import ValidationError
+from app.errors import NotFoundError, ValidationError
 from app.logging import get_logger
 from app.metrics import metrics
 from app.ports import SessionFactory
 from app.services.audit import AdjustmentService, LedgerAuditService
-from app.services.reconciliation.matcher import ManualMatch
+from app.services.reconciliation.matcher import ManualMatch, apply_match
+from app.workers.base import PeriodicJob
 
 logger = get_logger(__name__)
 
@@ -57,23 +65,27 @@ AuditDep = Annotated[LedgerAuditService, Depends(get_audit_service)]
 AdjustmentsDep = Annotated[AdjustmentService, Depends(get_adjustment_service)]
 ManualMatchDep = Annotated[ManualMatch, Depends(get_manual_match)]
 ReposDep = Annotated[Any, Depends(get_repositories)]
+JobsDep = Annotated[dict[str, PeriodicJob], Depends(get_jobs)]
 
 
 def _serialise_request(row: Any) -> dict[str, Any]:
-    return {
-        "id": row.id,
-        "object": "ledger_adjustment_request",
-        "merchant_id": row.merchant_id,
-        "currency": row.currency,
-        "lines": row.lines,
-        "reason_code": row.reason_code,
-        "requested_by": row.requested_by,
-        "requested_at": row.requested_at,
-        "approved_by": row.approved_by,
-        "approved_at": row.approved_at,
-        "posted_transaction_id": row.posted_transaction_id,
-        "status": row.status,
-    }
+    return contract_payload(
+        LedgerAdjustmentRequest,
+        {
+            "id": row.id,
+            "object": "ledger_adjustment_request",
+            "merchant_id": row.merchant_id,
+            "currency": row.currency,
+            "lines": row.lines,
+            "reason_code": row.reason_code,
+            "requested_by": row.requested_by,
+            "requested_at": row.requested_at,
+            "approved_by": row.approved_by,
+            "approved_at": row.approved_at,
+            "posted_transaction_id": row.posted_transaction_id,
+            "status": row.status,
+        },
+    )
 
 
 @router.post(
@@ -110,14 +122,58 @@ async def run_trial_balance(
         delta_minor=result.delta_minor,
         caller=caller,
     )
+    return contract_payload(
+        TrialBalanceResult,
+        {
+            "object": "trial_balance",
+            "currency": result.currency,
+            "balanced": result.balanced,
+            "delta_minor": result.delta_minor,
+            "debit_total_minor": result.debit_minor,
+            "credit_total_minor": result.credit_minor,
+            "as_of": result.as_of,
+        },
+    )
+
+
+@router.post(
+    "/jobs/{name}/run",
+    response_model=JobRunResponse,
+    summary="Run one tick of a periodic job now",
+)
+async def run_job(
+    jobs: JobsDep,
+    caller: InternalCaller,
+    name: Annotated[str, Path(min_length=1, max_length=64)],
+) -> dict[str, Any]:
+    """One pass of the named job, in this request, and its ``JobResult``.
+
+    ``name`` is the job's own name (``settlement_import``, ``batch_close``,
+    ``reconciliation_sweep``, ``payout_sweep``, ``payout_scheduler``, ``ledger_audit``,
+    ...); an unknown one is a 404 that lists the known ones. The tick is the scheduler's
+    own wrapper, so a failing job answers 200 with ``error`` set rather than a 500, and a
+    scheduled tick of the same job already running in this task is waited for, not
+    overlapped. A job switched off by configuration resolves, and its tick is the same
+    no-op it would be on a schedule.
+    """
+    job = jobs.get(name)
+    if job is None:
+        raise NotFoundError(f"no job named {name!r}", job=name, available=sorted(jobs))
+    result = await job.run_now()
+    metrics.increment("JobRunRequested", job=name, failed=str(result.error is not None).lower())
+    logger.info(
+        "job_run_via_http",
+        job=name,
+        items_processed=result.items_processed,
+        duration_ms=result.duration_ms,
+        error=result.error,
+        caller=caller,
+    )
     return {
-        "object": "trial_balance",
-        "currency": result.currency,
-        "balanced": result.balanced,
-        "delta_minor": result.delta_minor,
-        "debit_total_minor": result.debit_total_minor,
-        "credit_total_minor": result.credit_total_minor,
-        "as_of": result.as_of,
+        "name": result.name,
+        "items_processed": result.items_processed,
+        "duration_ms": result.duration_ms,
+        "error": result.error,
     }
 
 
@@ -245,8 +301,7 @@ async def manual_match(
                 item_id=item_id,
                 charge_id=body.charge_id,
             )
-        item.charge_id = outcome.charge_id
-        item.match_method = outcome.method
+        apply_match(item, outcome)
         item.status = "pending"
         payload = _serialise_item(item)
 

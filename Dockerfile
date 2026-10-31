@@ -11,7 +11,9 @@
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.2.11 /uv /usr/local/bin/uv
+# Pinned to the uv that wrote uv.lock. 0.2.x predates [[tool.uv.index]] and the current
+# lock format, and fails the --locked check below.
+COPY --from=ghcr.io/astral-sh/uv:0.9.30 /uv /usr/local/bin/uv
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -24,6 +26,11 @@ ARG UV_INDEX_PAYZENO_INTERNAL_USERNAME=ci
 ENV UV_INDEX_PAYZENO_INTERNAL_USERNAME=${UV_INDEX_PAYZENO_INTERNAL_USERNAME}
 
 WORKDIR /opt/payzeno
+
+# [tool.uv.sources] points payzeno-contracts at ../payzeno-contracts/python. The compose
+# build passes that directory as the `contracts_py` context; it lands where the relative
+# path expects it.
+COPY --from=contracts_py . /opt/payzeno-contracts/python
 
 # Dependency layer first — pyproject + lock only, so a source edit does not
 # re-resolve 60 packages on every build.
