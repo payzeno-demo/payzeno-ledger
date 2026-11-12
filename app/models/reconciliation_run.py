@@ -1,10 +1,10 @@
 """``reconciliation_run`` — one execution of the reconciliation pass over one batch.
 
-``pix_reconciliation_run_active`` is what PAY-2057 wants: instead of the retry drain
-discovering a running sweep lock by lock (200 failed advisory acquisitions per pass), it
-should ask this index whether the item's batch already has a ``running`` run and skip the
-whole batch. The ticket is still open — see the TODO in
-``app/services/reconciliation/backlog.py``.
+``pix_reconciliation_run_active`` is what PAY-2057 uses: the retry drain's candidate
+query (``ReconciliationItemRepository.list_retryable_ids``) asks this index whether the
+item's batch already has a ``running`` run and skips the whole batch, instead of
+discovering a running sweep lock by lock — 200 failed advisory acquisitions per pass, all
+of them learning the same fact.
 """
 
 from __future__ import annotations

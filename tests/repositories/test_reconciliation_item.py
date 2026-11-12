@@ -4,10 +4,12 @@ Three methods matter and all three have history attached:
 
 * `list_for_settlement(batch_id, statuses, limit)` — the sweep's read. Plain SELECT, no row
   locks, because the sweep serialises on the batch advisory lock instead.
-* `list_retryable_ids(limit)` — the drain's read. Scans `pix_reconciliation_item_retryable`
-  and filters `next_attempt_at <= now()`. Before migration 0014 this seq-scanned 2.4M rows
-  at a p99 of 12 seconds, which is the only reason the drain never used to keep up with the
-  sweep. Making it fast is what made the two paths genuinely concurrent.
+* `list_retryable_ids(limit)` — the drain's read. Scans `pix_reconciliation_item_retryable`,
+  filters `next_attempt_at <= now()`, and since PAY-2057 excludes items whose batch has a
+  `running` reconciliation run (in SQL, before the `LIMIT`). Before migration 0014 this
+  seq-scanned 2.4M rows at a p99 of 12 seconds, which is the only reason the drain never
+  used to keep up with the sweep. Making it fast is what made the two paths genuinely
+  concurrent.
 * `get_batch_id(item_id)` — added by PAY-2043 at 02:00 so `_claim_item` can ask for the
   batch advisory lock before it takes the row lock. Four lines, and it is the fix.
 """

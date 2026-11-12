@@ -5,12 +5,12 @@ where, and for how long" without taking a lock, so the assertions here are mostl
 what it does *not* do: no locks, no writes, and it stays honest about a batch that a
 sweep is currently holding.
 
-`batches_with_running_run` is tested even though nothing on the settlement path calls it.
-That is PAY-2057 — the ticket `dhotfix` filed at 02:52 in response to `mregression`'s
-lock-convoy objection on PR #171 — and the query is the finished half. Wiring it into
-`RetryScheduler.drain` needs the batch id per candidate, which `list_retryable_ids` does
-not return, and that is where it stopped. Testing the finished half means the day someone
-picks the ticket up, they only have to write the drain side.
+`batches_with_running_run` is tested as a reporting helper: the backlog uses it to
+explain why a bucket is not draining. PAY-2057 — the ticket `dhotfix` filed at 02:52 in
+response to `mregression`'s lock-convoy objection on PR #171 — was fixed in
+`ReconciliationItemRepository.list_retryable_ids`, which excludes those batches before
+its `LIMIT` so a pass has work left. Nothing on the settlement path calls this method,
+and the test at the bottom of this file is what keeps it that way.
 """
 
 from __future__ import annotations
@@ -200,7 +200,7 @@ async def test_backlog_never_writes_and_never_locks(sessions_factory) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# PAY-2057 — the finished half
+# PAY-2057 — the reporting half
 # --------------------------------------------------------------------------------------
 
 
@@ -226,12 +226,12 @@ async def test_batches_with_running_run_short_circuits_on_an_empty_list(
 
 
 async def test_nothing_on_the_settlement_path_calls_it_yet(sessions_factory) -> None:
-    """PAY-2057, asserted as the open question it is.
+    """PAY-2057 is fixed in the candidate query; this method stays out of the drain.
 
-    `RetryScheduler.drain` still discovers a running sweep lock by lock: 200 items, 200
-    transactions, 200 failed acquisitions, one fact. Closing this needs the batch id per
-    candidate and `list_retryable_ids` returns bare ids. When someone changes that, this
-    test is where the new behaviour goes.
+    `RetryScheduler.drain` filters running batches in `list_retryable_ids`, which is the
+    only place the exclusion can sit and still leave the `LIMIT` work to do. So
+    `retry.py` must not grow a second, Python-side exclusion step calling back into the
+    backlog service.
     """
     from app.services.reconciliation import retry
 

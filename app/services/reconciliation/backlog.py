@@ -156,15 +156,11 @@ class BacklogService:
     async def batches_with_running_run(self, batch_ids: list[str]) -> set[str]:
         """Which of these batches currently have a ``running`` reconciliation run.
 
-        Backed by ``pix_reconciliation_run_active``. Nothing on the settlement path
-        calls this yet.
-
-        TODO(PAY-2057): skip items whose batch has a running reconciliation_run instead
-        of discovering it lock by lock. A drain pass loops up to 200 items serially and
-        each one opens a transaction, asks for the batch lock, loses it to the sweep and
-        returns None — 200 wasted round trips to learn a single fact this query answers
-        once. Wiring it means RetryScheduler.drain needs the batch id per candidate,
-        which list_retryable_ids does not return today.
+        Backed by ``pix_reconciliation_run_active``. The backlog uses it to explain why a
+        bucket is not draining. The retry drain does not call it: PAY-2057 filters the
+        same fact inside ``ReconciliationItemRepository.list_retryable_ids``, where it has
+        to be to keep the swept batch's oldest items from taking every slot before the
+        ``LIMIT``.
         """
         if not batch_ids:
             return set()
