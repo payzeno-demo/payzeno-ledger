@@ -114,9 +114,11 @@ class ReconciliationRunRepository(BaseRepository[ReconciliationRun]):
     ) -> list[str]:
         """Which of ``batch_ids`` currently have a run in flight.
 
-        The backlog service uses this to explain *why* a bucket is not draining. It would
-        also be the input to PAY-2057 — skipping those batches up front instead of
-        discovering the lock one failed retry at a time — which is still open.
+        The backlog service uses this to explain *why* a bucket is not draining. The
+        drain does not: PAY-2057 filters running batches inside
+        ``ReconciliationItemRepository.list_retryable_ids``, so the exclusion is one
+        ``EXISTS`` on the candidate query rather than a second read with a Python-side
+        filter after the ``LIMIT``.
         """
         if not batch_ids:
             return []

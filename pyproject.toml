@@ -28,6 +28,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # In-memory SQLite for repository-query tests that must run without Postgres — the
+  # drain's candidate query is asserted against the real repository in tests/services.
+  "aiosqlite==0.22.1",
   "pytest==8.2.0",
   "pytest-asyncio==0.23.6",
   "pytest-cov==5.0.0",

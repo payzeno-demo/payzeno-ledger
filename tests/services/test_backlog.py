@@ -6,11 +6,12 @@ what it does *not* do: no locks, no writes, and it stays honest about a batch th
 sweep is currently holding.
 
 `batches_with_running_run` is tested even though nothing on the settlement path calls it.
-That is PAY-2057 — the ticket `dhotfix` filed at 02:52 in response to `mregression`'s
-lock-convoy objection on PR #171 — and the query is the finished half. Wiring it into
-`RetryScheduler.drain` needs the batch id per candidate, which `list_retryable_ids` does
-not return, and that is where it stopped. Testing the finished half means the day someone
-picks the ticket up, they only have to write the drain side.
+PAY-2057 — the ticket `dhotfix` filed at 02:52 in response to `mregression`'s lock-convoy
+objection on PR #171 — was fixed somewhere else: in
+`ReconciliationItemRepository.list_retryable_ids`, which has to exclude those batches
+before its `LIMIT` for the pass to have any work left. So this method stays a reporting
+helper: it explains why a bucket is not draining. The test below is what keeps it from
+quietly growing into a second exclusion path.
 """
 
 from __future__ import annotations
@@ -200,7 +201,7 @@ async def test_backlog_never_writes_and_never_locks(sessions_factory) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# PAY-2057 — the finished half
+# PAY-2057 — the reporting half
 # --------------------------------------------------------------------------------------
 
 
@@ -226,12 +227,11 @@ async def test_batches_with_running_run_short_circuits_on_an_empty_list(
 
 
 async def test_nothing_on_the_settlement_path_calls_it_yet(sessions_factory) -> None:
-    """PAY-2057, asserted as the open question it is.
+    """PAY-2057 is closed elsewhere; this method stays out of the drain.
 
-    `RetryScheduler.drain` still discovers a running sweep lock by lock: 200 items, 200
-    transactions, 200 failed acquisitions, one fact. Closing this needs the batch id per
-    candidate and `list_retryable_ids` returns bare ids. When someone changes that, this
-    test is where the new behaviour goes.
+    The drain filters the same fact inside its candidate query, which is the only place
+    the exclusion can sit and still leave the ``LIMIT`` work to do. So ``retry.py`` must
+    not grow a second, Python-side exclusion step calling back into the backlog service.
     """
     from app.services.reconciliation import retry
 

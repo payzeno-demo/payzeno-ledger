@@ -168,9 +168,13 @@ class RetryScheduler:
         # 5,000 items; pg_advisory_xact_lock would park this drain worker on a pooled
         # connection for the whole pass, and 200 of those exhausts DATABASE_POOL_SIZE.
         # Failing fast leaves the item retryable for the next drain, which is exactly what
-        # we want — the sweep is settling it anyway. The cost is the convoy mregression
-        # raised on #171 at 02:52: during a sweep, every attempt in a drain pass fails and
-        # throughput for that batch is zero. PAY-2057 is the fix and it is not done.
+        # we want — the sweep is settling it anyway. Since PAY-2057 the drain does not
+        # offer such an item in the first place (``list_retryable_ids`` excludes batches
+        # with a ``running`` run), so a pass spends its ``limit`` on work it can do; the
+        # convoy mregression raised on #171 at 02:52 is a throughput cost the filter
+        # removes. The try-lock stays because the run-status read races the sweep start
+        # and a run can close between the read and this call — the lock, not the filter,
+        # is what keeps the paths mutually exclusive (ADR 0011).
         if not await self._locks.try_acquire_batch_lock(session, batch_id):
             return None
 
@@ -188,6 +192,12 @@ class RetryScheduler:
 
         Serial on purpose: the whole point of the backoff column is to stop hammering a
         degraded acquirer, and firing ``limit`` retries concurrently would undo it.
+
+        Candidates already exclude batches with a ``running`` reconciliation run
+        (PAY-2057, in ``ReconciliationItemRepository.list_retryable_ids``), so a pass
+        during a sweep settles the other batches instead of losing every item to the
+        batch try-lock. That exclusion is an optimisation: ``retry_item`` still asks for
+        the lock and still returns ``None`` when a sweep beat it to the batch.
         """
         async with self._sessions.begin() as session:
             item_ids = await self._items.list_retryable_ids(session, limit=limit)

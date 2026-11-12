@@ -8,7 +8,9 @@ Three of the methods below have history attached and it is worth knowing which:
   sweep — and it is exactly why a retry holding ``FOR UPDATE`` on one of these rows
   skipped nothing.
 * :meth:`ReconciliationItemRepository.list_retryable_ids` is the retry drain's read. It
-  scans ``pix_reconciliation_item_retryable`` and filters ``next_attempt_at <= now()``.
+  scans ``pix_reconciliation_item_retryable``, filters ``next_attempt_at <= now()``, and
+  since PAY-2057 also excludes items whose batch has a ``running`` ``reconciliation_run``
+  — in the query, before the ``LIMIT``, so a swept batch cannot consume the whole pass.
   Before migration ``0014`` this sequential-scanned 2.4M rows at a p99 of twelve seconds,
   which is the only reason the drain used to fall so far behind the sweep that the two
   never overlapped. Making it fast (arc PERF, month 7) is what made them concurrent.
@@ -28,11 +30,12 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ReconciliationItemNotFoundError
 from app.models.reconciliation_item import ReconciliationItem
+from app.models.reconciliation_run import ReconciliationRun
 from app.models.settlement_batch import SettlementBatch
 from app.repositories.base import BaseRepository
 
@@ -126,12 +129,29 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         ordered by ``last_attempt_at`` and did not filter on it at all, which is how four
         drains hammered a degraded acquirer at up to 800 capture attempts a minute during
         exactly the degradation that caused the incident.
+
+        PAY-2057 adds the second filter: an item whose batch has a ``running``
+        ``reconciliation_run`` is not a candidate, because the drain's non-blocking batch
+        lock cannot be taken while the sweep holds it. It belongs **in this query, before
+        the ``LIMIT``**: filtering afterwards would still let the swept batch's oldest
+        items take every slot and the pass would settle nothing. The ``EXISTS`` rides
+        ``pix_reconciliation_run_active``, which is partial on ``status = 'running'``.
+
+        This is a throughput filter, not a mutual-exclusion mechanism. The run row is
+        visible before the sweep takes the batch lock and can be closed between this read
+        and the claim, so ``try_acquire_batch_lock`` stays the thing that makes the drain
+        safe (ADR 0011).
         """
         cutoff = now or dt.datetime.now(dt.UTC)
+        sweeping = exists().where(
+            ReconciliationRun.batch_id == ReconciliationItem.batch_id,
+            ReconciliationRun.status == "running",
+        )
         stmt = (
             select(ReconciliationItem.id)
             .where(ReconciliationItem.status.in_(("pending", "retryable")))
             .where(ReconciliationItem.next_attempt_at <= cutoff)
+            .where(~sweeping)
             .order_by(ReconciliationItem.next_attempt_at)
             .limit(limit)
         )
@@ -297,12 +317,11 @@ class ReconciliationItemRepository(BaseRepository[ReconciliationItem]):
         polled every thirty seconds while the incident was being drained.
 
         .. note::
-           TODO(PAY-2057): this returns every batch with retryable items, including ones
-           whose ``reconciliation_run`` is currently ``running``. The backlog service then
-           discovers that lock by lock — it retries an item, loses the batch lock, gets
-           ``None``, and moves on. Filtering here on
-           ``ReconciliationRunRepository.list_running_batch_ids`` would skip them up
-           front. Filed at 02:52 and still open.
+           Deliberately unfiltered. This keeps reporting a batch whose
+           ``reconciliation_run`` is currently ``running``, because the on-call view has
+           to say where the backlog is, not only what the drain can act on right now.
+           PAY-2057 excludes those batches in :meth:`list_retryable_ids`, which is the
+           only caller that needs to.
         """
         stmt = (
             select(

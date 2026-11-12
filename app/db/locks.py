@@ -102,7 +102,10 @@ class AdvisoryLockManager:
 
         The cost is the lock convoy ``mregression`` raised on PR #171 at 02:52: during a
         sweep, every one of a drain pass's 200 attempts fails and drain throughput for
-        that batch collapses to zero. PAY-2057 is the fix and it is not done.
+        that batch collapses to zero. PAY-2057 keeps the drain from offering that batch
+        at all (``ReconciliationItemRepository.list_retryable_ids`` filters on a running
+        ``reconciliation_run``); this non-blocking attempt remains as the correctness
+        backstop for the race between that read and the sweep start.
         """
         result = await session.execute(
             text("SELECT pg_try_advisory_xact_lock(:ns, :key)"),
